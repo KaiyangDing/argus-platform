@@ -42,6 +42,27 @@ services:
       timeout: 3s
       retries: 10
 
+  mineru:
+    build: docker/mineru
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ports:
+      - "8888:8000"
+    volumes:
+      - minerudata:/root
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
 volumes:
   pgdata:
   miniodata:
+  minerudata:

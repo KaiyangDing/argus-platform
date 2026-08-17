@@ -13,15 +13,21 @@
                                                │                └─► MinIO（PDF 原件）
                                           arq worker ◄─── Redis 队列
                                                │
-                                               └──HTTP──► mineru-api（本机 GPU 进程，URL 配置化）
+                                               └──HTTP──► mineru-api（compose 内 GPU 容器，URL 配置化）
 
 模块化单体：app 与 worker 同一代码库、同一镜像、不同启动命令（见 docs/adr/）。
 
 ## 怎么跑（dev）
 
-前置：Docker Desktop、uv、Python 3.14、Node 20+。
+前置：Docker Desktop、uv、Python 3.14、Node 20+；解析走 GPU 需 NVIDIA
+显卡（无卡机器去掉 compose 里 mineru 的 deploy 段，自动回落 CPU 模式）。
 
-起基础设施：
+首次准备解析服务（一次性；镜像约 6-8GB，模型约 2.4GB 下载进卷）：
+
+    docker compose build mineru
+    docker compose run --rm mineru mineru-models-download -s modelscope -m pipeline
+
+起基础设施（PG / Redis / MinIO / mineru）：
 
     docker compose up -d
 
@@ -36,6 +42,7 @@
     npm run dev
 
 探活：页面首页即三依赖状态；或 curl http://localhost:8000/healthz
+解析服务就绪看 http://localhost:8888/docs（调用需带 backend=pipeline）
 
 ## 测试
 
