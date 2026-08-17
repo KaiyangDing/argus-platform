@@ -10,11 +10,13 @@ from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
 from app.logs import setup_logging
+from app.routers.auth import router as auth_router
 
 setup_logging()
 log = structlog.get_logger()
 
 app = FastAPI(title="Argus Platform", version="0.1.0")
+app.include_router(auth_router)
 
 
 async def _check_postgres(settings: Settings) -> None:

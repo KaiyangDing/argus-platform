@@ -1,56 +1,56 @@
 import { useCallback, useEffect, useState } from 'react'
 
-type HealthResponse = {
-  status: 'ok' | 'degraded'
-  deps: Record<string, string>
-}
+import { ApiError, clearTokens, fetchMe, getAccessToken, type UserOut } from './api'
+import Auth from './Auth'
+import HealthPanel from './HealthPanel'
 
-type ViewState =
-  | { kind: 'loading' }
-  | { kind: 'loaded'; health: HealthResponse }
-  | { kind: 'unreachable'; error: string }
-
-const DEP_LABELS: Record<string, string> = {
-  postgres: 'PostgreSQL 16 + pgvector',
-  redis: 'Redis 7',
-  minio: 'MinIO',
-}
-
-const COLORS = {
-  ok: '#16a34a',
-  bad: '#dc2626',
-  warn: '#d97706',
-  muted: '#6b7280',
-  border: '#e5e7eb',
-} as const
-
-function badgeFor(state: ViewState): { text: string; color: string } {
-  if (state.kind === 'loading') return { text: 'checking…', color: COLORS.muted }
-  if (state.kind === 'unreachable') return { text: 'API unreachable', color: COLORS.bad }
-  return state.health.status === 'ok'
-    ? { text: 'all systems ok', color: COLORS.ok }
-    : { text: 'degraded', color: COLORS.warn }
-}
+type AuthState =
+  | { kind: 'checking' }
+  | { kind: 'anonymous' }
+  | { kind: 'authed'; user: UserOut }
 
 export default function App() {
-  const [state, setState] = useState<ViewState>({ kind: 'loading' })
+  const [auth, setAuth] = useState<AuthState>({ kind: 'checking' })
 
-  const refresh = useCallback(async () => {
-    setState({ kind: 'loading' })
+  const loadUser = useCallback(async () => {
+    if (!getAccessToken()) {
+      setAuth({ kind: 'anonymous' })
+      return
+    }
     try {
-      const resp = await fetch('/healthz')
-      const health = (await resp.json()) as HealthResponse
-      setState({ kind: 'loaded', health })
+      const user = await fetchMe()
+      setAuth({ kind: 'authed', user })
     } catch (err) {
-      setState({ kind: 'unreachable', error: String(err) })
+      // ApiError = 票据被服务器拒绝，清掉；网络级失败则保留 token，
+      // 停在登录页，提交时的报错会提示后端不可达
+      if (err instanceof ApiError) clearTokens()
+      setAuth({ kind: 'anonymous' })
     }
   }, [])
 
   useEffect(() => {
-    void refresh()
-  }, [refresh])
+    void loadUser()
+  }, [loadUser])
 
-  const badge = badgeFor(state)
+  if (auth.kind === 'checking') {
+    return (
+      <main
+        style={{
+          fontFamily: 'system-ui, sans-serif',
+          maxWidth: 640,
+          margin: '48px auto',
+          padding: '0 16px',
+          color: '#6b7280',
+        }}
+      >
+        载入中…
+      </main>
+    )
+  }
+
+  if (auth.kind === 'anonymous') {
+    return <Auth onAuthed={() => void loadUser()} />
+  }
 
   return (
     <main
@@ -62,82 +62,38 @@ export default function App() {
         color: '#111827',
       }}
     >
-      <h1 style={{ marginBottom: 4 }}>Argus Platform</h1>
-      <p style={{ marginTop: 0, color: COLORS.muted }}>P1.1 骨架与编排 — 基础设施探活</p>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0' }}>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            border: `1px solid ${COLORS.border}`,
-            borderRadius: 999,
-            padding: '6px 14px',
-            fontWeight: 600,
-          }}
-        >
-          <span style={{ width: 10, height: 10, borderRadius: '50%', background: badge.color }} />
-          {badge.text}
-        </span>
-        <button
-          onClick={() => void refresh()}
-          disabled={state.kind === 'loading'}
-          style={{
-            padding: '6px 14px',
-            borderRadius: 8,
-            border: `1px solid ${COLORS.border}`,
-            background: '#fff',
-            cursor: 'pointer',
-          }}
-        >
-          刷新
-        </button>
-      </div>
-
-      {state.kind === 'unreachable' && (
-        <p style={{ color: COLORS.bad }}>
-          后端连不上（{state.error}）。确认 uvicorn 已在 8000 端口运行。
-        </p>
-      )}
-
-      {state.kind === 'loaded' && (
-        <div style={{ display: 'grid', gap: 12 }}>
-          {Object.entries(state.health.deps).map(([name, status]) => {
-            const ok = status === 'ok'
-            return (
-              <div
-                key={name}
-                style={{
-                  border: `1px solid ${COLORS.border}`,
-                  borderRadius: 12,
-                  padding: '14px 16px',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 16,
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600 }}>{DEP_LABELS[name] ?? name}</div>
-                  <div style={{ fontSize: 13, color: COLORS.muted }}>{name}</div>
-                </div>
-                <div
-                  style={{
-                    color: ok ? COLORS.ok : COLORS.bad,
-                    fontWeight: 600,
-                    maxWidth: 320,
-                    overflowWrap: 'anywhere',
-                    textAlign: 'right',
-                  }}
-                >
-                  {ok ? 'ok' : status}
-                </div>
-              </div>
-            )
-          })}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'baseline',
+          gap: 16,
+        }}
+      >
+        <div>
+          <h1 style={{ marginBottom: 4 }}>Argus Platform</h1>
+          <p style={{ marginTop: 0, color: '#6b7280' }}>基础设施探活</p>
         </div>
-      )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, whiteSpace: 'nowrap' }}>
+          <span style={{ color: '#6b7280', fontSize: 14 }}>{auth.user.email}</span>
+          <button
+            onClick={() => {
+              clearTokens()
+              setAuth({ kind: 'anonymous' })
+            }}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              border: '1px solid #e5e7eb',
+              background: '#fff',
+              cursor: 'pointer',
+            }}
+          >
+            登出
+          </button>
+        </div>
+      </div>
+      <HealthPanel />
     </main>
   )
 }

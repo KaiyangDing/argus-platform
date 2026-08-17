@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     minio_secret_key: str = "argusminio"
     minio_secure: bool = False
     mineru_api_url: str = "http://127.0.0.1:8888"
+    jwt_secret: str = "dev-secret-change-me-not-for-production!"
+    jwt_access_ttl_minutes: int = 15
+    jwt_refresh_ttl_days: int = 7
 
 
 @lru_cache
