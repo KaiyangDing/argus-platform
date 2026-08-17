@@ -1,11 +1,13 @@
 """companies/documents API 集成测试：真 PG + 真 MinIO，覆盖 P1.3 验收行。"""
 
 import hashlib
+import uuid
 
 import pytest
+from conftest import FakeArq
 from httpx import AsyncClient, Response
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
@@ -149,3 +151,69 @@ async def test_upload_oversize_413(
     monkeypatch.setattr(get_settings(), "max_upload_mb", 0)
     resp = await _upload(client, company["id"], headers)
     assert resp.status_code == 413
+
+
+async def test_upload_enqueues_ingest_job(
+    client: AsyncClient, arq_stub: FakeArq
+) -> None:
+    headers = await _auth_headers(client, "alice@example.com")
+    company = await _create_company(client, headers)
+    resp = await _upload(client, company["id"], headers)
+    doc_id = resp.json()["id"]
+    assert arq_stub.jobs == [("ingest_document", (doc_id,))]
+
+
+async def _mark_failed(
+    factory: async_sessionmaker[AsyncSession], document_id: str
+) -> None:
+    async with factory() as session:
+        await session.execute(
+            update(Document)
+            .where(Document.id == uuid.UUID(document_id))
+            .values(status="failed", error="boom")
+        )
+        await session.commit()
+
+
+async def test_retry_failed_document(
+    client: AsyncClient,
+    arq_stub: FakeArq,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    headers = await _auth_headers(client, "alice@example.com")
+    company = await _create_company(client, headers)
+    doc = (await _upload(client, company["id"], headers)).json()
+    await _mark_failed(session_factory, doc["id"])
+
+    resp = await client.post(
+        f"/api/companies/{company['id']}/documents/{doc['id']}/retry", headers=headers
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["error"] is None
+    assert len(arq_stub.jobs) == 2
+
+
+async def test_retry_non_failed_409(client: AsyncClient) -> None:
+    headers = await _auth_headers(client, "alice@example.com")
+    company = await _create_company(client, headers)
+    doc = (await _upload(client, company["id"], headers)).json()
+    resp = await client.post(
+        f"/api/companies/{company['id']}/documents/{doc['id']}/retry", headers=headers
+    )
+    assert resp.status_code == 409
+
+
+async def test_retry_foreign_document_404(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    headers_a = await _auth_headers(client, "a@example.com")
+    company = await _create_company(client, headers_a)
+    doc = (await _upload(client, company["id"], headers_a)).json()
+    await _mark_failed(session_factory, doc["id"])
+    headers_b = await _auth_headers(client, "b@example.com")
+    resp = await client.post(
+        f"/api/companies/{company['id']}/documents/{doc['id']}/retry", headers=headers_b
+    )
+    assert resp.status_code == 404

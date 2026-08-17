@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from typing import Annotated
 
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_session
-from app.deps import get_current_user
+from app.deps import get_arq, get_current_user
 from app.models import Company, Document, User
 from app.schemas import CompanyIn, CompanyOut, DocumentOut
 from app.storage import put_pdf
@@ -82,6 +83,7 @@ async def upload_document(
     file: UploadFile,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
+    arq: Annotated[ArqRedis, Depends(get_arq)],
 ) -> DocumentOut:
     company = await _get_own_company(company_id, user, session)
 
@@ -126,5 +128,33 @@ async def upload_document(
         ) from exc
     await put_pdf(document.object_key, data)
     await session.commit()
+    await arq.enqueue_job("ingest_document", str(document.id))
     await session.refresh(document)
     return DocumentOut.model_validate(document)
+
+
+@router.post("/{company_id}/documents/{document_id}/retry")
+async def retry_document(
+    company_id: uuid.UUID,
+    document_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    arq: Annotated[ArqRedis, Depends(get_arq)],
+) -> DocumentOut:
+    company = await _get_own_company(company_id, user, session)
+    doc = await session.get(Document, document_id)
+    if doc is None or doc.company_id != company.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+    if doc.status != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed documents can be retried",
+        )
+    doc.status = "queued"
+    doc.error = None
+    await session.commit()
+    await arq.enqueue_job("ingest_document", str(doc.id))
+    await session.refresh(doc)
+    return DocumentOut.model_validate(doc)

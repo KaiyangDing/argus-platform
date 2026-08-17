@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 import asyncpg
 import structlog
 from anyio import to_thread
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from minio import Minio
@@ -22,9 +24,11 @@ log = structlog.get_logger()
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     await ensure_bucket()
+    app_.state.arq = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     yield
+    await app_.state.arq.aclose()
     await engine.dispose()
 
 

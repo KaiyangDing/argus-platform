@@ -55,9 +55,38 @@ def _test_db() -> None:
     asyncio.run(_create_db_and_tables())
 
 
+class FakeArq:
+    """记录 enqueue 调用的队列桩；端点测试用它断言任务投递。"""
+
+    def __init__(self) -> None:
+        self.jobs: list[tuple[str, tuple[object, ...]]] = []
+
+    async def enqueue_job(self, name: str, *args: object, **kwargs: object) -> None:
+        self.jobs.append((name, args))
+
+
 @pytest.fixture
-async def client(_test_db: None) -> AsyncIterator[AsyncClient]:
+def arq_stub() -> FakeArq:
+    return FakeArq()
+
+
+@pytest.fixture
+async def session_factory(
+    _test_db: None,
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """NullPool 会话工厂：worker/DB 直连测试用（绕过端点依赖注入）。"""
+    from app.db import async_url
+
+    engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield factory
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(_test_db: None, arq_stub: FakeArq) -> AsyncIterator[AsyncClient]:
     from app.db import async_url, get_session
+    from app.deps import get_arq
     from app.main import app
 
     engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
@@ -70,6 +99,7 @@ async def client(_test_db: None) -> AsyncIterator[AsyncClient]:
             yield session
 
     app.dependency_overrides[get_session] = _override_session
+    app.dependency_overrides[get_arq] = lambda: arq_stub
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as c:

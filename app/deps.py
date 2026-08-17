@@ -1,6 +1,7 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from arq.connections import ArqRedis
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,3 +30,7 @@ async def get_current_user(
     if user is None:
         raise unauthorized
     return user
+
+
+def get_arq(request: Request) -> ArqRedis:
+    return request.app.state.arq

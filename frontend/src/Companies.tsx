@@ -5,10 +5,13 @@ import {
   createCompany,
   listCompanies,
   listDocuments,
+  retryDocument,
   uploadDocument,
   type CompanyOut,
   type DocumentOut,
 } from './api'
+
+const POLL_MS = 5000
 
 const COLORS = {
   ok: '#16a34a',
@@ -72,7 +75,11 @@ export default function Companies() {
   useEffect(() => {
     setDocs([])
     setDocError(null)
-    if (selectedId) void loadDocs(selectedId)
+    if (!selectedId) return
+    void loadDocs(selectedId)
+    // 状态机在 worker 侧推进，轮询保持文档状态新鲜；SSE 是 P1.5 研究进度的事
+    const timer = window.setInterval(() => void loadDocs(selectedId), POLL_MS)
+    return () => window.clearInterval(timer)
   }, [selectedId, loadDocs])
 
   async function submitCompany(e: FormEvent) {
@@ -101,6 +108,17 @@ export default function Companies() {
       setDocError(errText(err))
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function onRetry(documentId: string) {
+    if (!selectedId) return
+    setDocError(null)
+    try {
+      await retryDocument(selectedId, documentId)
+      await loadDocs(selectedId)
+    } catch (err) {
+      setDocError(errText(err))
     }
   }
 
@@ -236,16 +254,40 @@ export default function Companies() {
                       <div style={{ fontSize: 12, color: COLORS.bad }}>{d.error}</div>
                     )}
                   </div>
-                  <span
+                  <div
                     style={{
-                      color: STATUS_COLORS[d.status] ?? COLORS.muted,
-                      fontWeight: 600,
-                      fontSize: 13,
-                      whiteSpace: 'nowrap',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-end',
+                      gap: 6,
                     }}
                   >
-                    {d.status}
-                  </span>
+                    <span
+                      style={{
+                        color: STATUS_COLORS[d.status] ?? COLORS.muted,
+                        fontWeight: 600,
+                        fontSize: 13,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {d.status}
+                    </span>
+                    {d.status === 'failed' && (
+                      <button
+                        onClick={() => void onRetry(d.id)}
+                        style={{
+                          padding: '4px 10px',
+                          borderRadius: 6,
+                          border: `1px solid ${COLORS.border}`,
+                          background: '#fff',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        重试
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

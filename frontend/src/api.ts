@@ -150,3 +150,11 @@ export async function uploadDocument(companyId: string, file: File): Promise<Doc
   if (!resp.ok) throw await readError(resp)
   return (await resp.json()) as DocumentOut
 }
+
+export async function retryDocument(companyId: string, documentId: string): Promise<DocumentOut> {
+  const resp = await apiFetch(`/api/companies/${companyId}/documents/${documentId}/retry`, {
+    method: 'POST',
+  })
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as DocumentOut
+}

@@ -13,27 +13,25 @@
                                                │                └─► MinIO（PDF 原件）
                                           arq worker ◄─── Redis 队列
                                                │
-                                               └──HTTP──► mineru-api（compose 内 GPU 容器，URL 配置化）
+                                               └── 语料管线 / 研究图（产品内实现，设计源自研究仓 argus-lg）
 
 模块化单体：app 与 worker 同一代码库、同一镜像、不同启动命令（见 docs/adr/）。
 
 ## 怎么跑（dev）
 
-前置：Docker Desktop、uv、Python 3.14、Node 20+；解析走 GPU 需 NVIDIA
-显卡（无卡机器去掉 compose 里 mineru 的 deploy 段，自动回落 CPU 模式）。
+前置：Docker Desktop、uv、Python 3.14、Node 20+。
 
-首次准备解析服务（一次性；镜像约 6-8GB，模型约 2.4GB 下载进卷）：
-
-    docker compose build mineru
-    docker compose run --rm mineru mineru-models-download -s modelscope -m pipeline
-
-起基础设施（PG / Redis / MinIO / mineru）：
+起基础设施（PG / Redis / MinIO）：
 
     docker compose up -d
 
 起后端（http://localhost:8000，API 文档在 /docs）：
 
     uv run uvicorn app.main:app --reload
+
+起 worker（异步入库执行者，另开终端）：
+
+    uv run arq app.worker.WorkerSettings
 
 起前端（http://localhost:5173）：
 
@@ -42,7 +40,6 @@
     npm run dev
 
 探活：页面首页即三依赖状态；或 curl http://localhost:8000/healthz
-解析服务就绪看 http://localhost:8888/docs（调用需带 backend=pipeline）
 
 ## 测试
 
@@ -52,8 +49,8 @@
 
 - [x] P1.1 骨架与编排
 - [x] P1.2 用户体系
-- [ ] P1.3 语料域与上传
-- [ ] P1.4 异步入库流水线
+- [x] P1.3 语料域与上传
+- [x] P1.4 异步入库流水线（全链真跑：解析 → 切块 → embedding → per-company 混合索引）
 - [ ] P1.5 研究任务中心与报告呈现
 - [ ] P2 追问对话
 - [ ] P3 工程硬化
