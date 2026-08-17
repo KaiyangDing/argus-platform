@@ -26,6 +26,7 @@ TEST_DB_URL = "postgresql://argus:argus@localhost:5432/argus_test"
 ADMIN_DB_URL = "postgresql://argus:argus@localhost:5432/postgres"
 
 os.environ["ARGUS_DATABASE_URL"] = TEST_DB_URL
+os.environ["ARGUS_MINIO_BUCKET"] = "argus-test-documents"
 
 
 async def _create_db_and_tables() -> None:
@@ -38,11 +39,15 @@ async def _create_db_and_tables() -> None:
 
     import app.models  # noqa: F401  导入即注册表元数据
     from app.db import Base, async_url
+    from app.storage import ensure_bucket
 
     engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
+
+    # ASGITransport 不执行 lifespan，测试 bucket 在此确保
+    await ensure_bucket()
 
 
 @pytest.fixture(scope="session")

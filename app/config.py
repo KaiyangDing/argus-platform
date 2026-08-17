@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-secret-change-me-not-for-production!"
     jwt_access_ttl_minutes: int = 15
     jwt_refresh_ttl_days: int = 7
+    minio_bucket: str = "argus-documents"
+    max_upload_mb: int = 50
 
 
 @lru_cache

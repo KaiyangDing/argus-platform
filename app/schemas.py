@@ -30,3 +30,29 @@ class UserOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class CompanyIn(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+
+    name: str = Field(min_length=1, max_length=200)
+
+
+class CompanyOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DocumentOut(BaseModel):
+    id: uuid.UUID
+    filename: str
+    sha256: str
+    size_bytes: int
+    status: str
+    error: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

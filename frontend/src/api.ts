@@ -101,3 +101,52 @@ export async function fetchMe(): Promise<UserOut> {
   if (!resp.ok) throw await readError(resp)
   return (await resp.json()) as UserOut
 }
+
+export type CompanyOut = {
+  id: string
+  name: string
+  created_at: string
+}
+
+export type DocumentOut = {
+  id: string
+  filename: string
+  sha256: string
+  size_bytes: number
+  status: string
+  error: string | null
+  created_at: string
+}
+
+export async function listCompanies(): Promise<CompanyOut[]> {
+  const resp = await apiFetch('/api/companies')
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as CompanyOut[]
+}
+
+export async function createCompany(name: string): Promise<CompanyOut> {
+  const resp = await apiFetch('/api/companies', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as CompanyOut
+}
+
+export async function listDocuments(companyId: string): Promise<DocumentOut[]> {
+  const resp = await apiFetch(`/api/companies/${companyId}/documents`)
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as DocumentOut[]
+}
+
+export async function uploadDocument(companyId: string, file: File): Promise<DocumentOut> {
+  const form = new FormData()
+  form.append('file', file)
+  const resp = await apiFetch(`/api/companies/${companyId}/documents`, {
+    method: 'POST',
+    body: form,
+  })
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as DocumentOut
+}

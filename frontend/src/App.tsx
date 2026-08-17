@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError, clearTokens, fetchMe, getAccessToken, type UserOut } from './api'
 import Auth from './Auth'
+import Companies from './Companies'
 import HealthPanel from './HealthPanel'
 
 type AuthState =
@@ -72,7 +73,7 @@ export default function App() {
       >
         <div>
           <h1 style={{ marginBottom: 4 }}>Argus Platform</h1>
-          <p style={{ marginTop: 0, color: '#6b7280' }}>基础设施探活</p>
+          <p style={{ marginTop: 0, color: '#6b7280' }}>企业尽调研究平台</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, whiteSpace: 'nowrap' }}>
           <span style={{ color: '#6b7280', fontSize: 14 }}>{auth.user.email}</span>
@@ -93,7 +94,11 @@ export default function App() {
           </button>
         </div>
       </div>
-      <HealthPanel />
+      <Companies />
+      <section style={{ marginTop: 32, borderTop: '1px solid #e5e7eb', paddingTop: 16 }}>
+        <h2 style={{ fontSize: 15, color: '#6b7280', marginTop: 0 }}>系统状态</h2>
+        <HealthPanel />
+      </section>
     </main>
   )
 }

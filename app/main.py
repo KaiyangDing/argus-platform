@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 import asyncpg
 import structlog
@@ -9,14 +11,26 @@ from minio import Minio
 from redis.asyncio import Redis
 
 from app.config import Settings, get_settings
+from app.db import engine
 from app.logs import setup_logging
 from app.routers.auth import router as auth_router
+from app.routers.companies import router as companies_router
+from app.storage import ensure_bucket
 
 setup_logging()
 log = structlog.get_logger()
 
-app = FastAPI(title="Argus Platform", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    await ensure_bucket()
+    yield
+    await engine.dispose()
+
+
+app = FastAPI(title="Argus Platform", version="0.1.0", lifespan=lifespan)
 app.include_router(auth_router)
+app.include_router(companies_router)
 
 
 async def _check_postgres(settings: Settings) -> None:
