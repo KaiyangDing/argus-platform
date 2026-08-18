@@ -25,10 +25,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from minio.error import S3Error
 
 from app.config import get_settings
+from app.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
 from app.storage import get_bytes, put_bytes
 
-DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-EMBED_MODEL = "text-embedding-v4"
 EMBED_BATCH = 10
 
 # 中文语料分隔符优先级：段落 > 换行 > 句读 > 空格 > 硬切

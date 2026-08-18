@@ -56,3 +56,19 @@ class DocumentOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ResearchTaskSummary(BaseModel):
+    id: uuid.UUID
+    company_id: uuid.UUID
+    status: str
+    error: str | None
+    created_at: datetime
+    finished_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class ResearchTaskOut(ResearchTaskSummary):
+    report_md: str | None
+    evidence: list[dict[str, object]] | None

@@ -10,6 +10,7 @@ import {
   type CompanyOut,
   type DocumentOut,
 } from './api'
+import Research from './Research'
 
 const POLL_MS = 5000
 
@@ -294,6 +295,8 @@ export default function Companies() {
           )}
         </div>
       )}
+
+      {selected && <Research companyId={selected.id} />}
     </section>
   )
 }

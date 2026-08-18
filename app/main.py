@@ -17,6 +17,7 @@ from app.db import engine
 from app.logs import setup_logging
 from app.routers.auth import router as auth_router
 from app.routers.companies import router as companies_router
+from app.routers.research import router as research_router
 from app.storage import ensure_bucket
 
 setup_logging()
@@ -35,6 +36,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="Argus Platform", version="0.1.0", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(companies_router)
+app.include_router(research_router)
 
 
 async def _check_postgres(settings: Settings) -> None:

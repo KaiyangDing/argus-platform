@@ -158,3 +158,73 @@ export async function retryDocument(companyId: string, documentId: string): Prom
   if (!resp.ok) throw await readError(resp)
   return (await resp.json()) as DocumentOut
 }
+
+export type ResearchTaskSummary = {
+  id: string
+  company_id: string
+  status: string
+  error: string | null
+  created_at: string
+  finished_at: string | null
+}
+
+export type EvidenceRef = {
+  chunk_id: string
+  source_id: string
+  page: number
+  text: string
+}
+
+export type ResearchTaskOut = ResearchTaskSummary & {
+  report_md: string | null
+  evidence: EvidenceRef[] | null
+}
+
+export async function startResearch(companyId: string): Promise<ResearchTaskSummary> {
+  const resp = await apiFetch(`/api/companies/${companyId}/research`, { method: 'POST' })
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as ResearchTaskSummary
+}
+
+export async function listResearch(companyId: string): Promise<ResearchTaskSummary[]> {
+  const resp = await apiFetch(`/api/companies/${companyId}/research`)
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as ResearchTaskSummary[]
+}
+
+export async function getResearch(taskId: string): Promise<ResearchTaskOut> {
+  const resp = await apiFetch(`/api/research/${taskId}`)
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as ResearchTaskOut
+}
+
+export type ResearchEvent = { node: string; detail: string }
+
+/** SSE 消费：fetch 流式读取（EventSource 带不了 Authorization 头）。 */
+export async function streamResearchEvents(
+  taskId: string,
+  onEvent: (e: ResearchEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const resp = await apiFetch(`/api/research/${taskId}/events`, { signal })
+  if (!resp.ok || !resp.body) throw await readError(resp)
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let idx = buffer.indexOf('\n\n')
+    while (idx >= 0) {
+      const raw = buffer.slice(0, idx)
+      buffer = buffer.slice(idx + 2)
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('data:')) {
+          onEvent(JSON.parse(line.slice(5)) as ResearchEvent)
+        }
+      }
+      idx = buffer.indexOf('\n\n')
+    }
+  }
+}

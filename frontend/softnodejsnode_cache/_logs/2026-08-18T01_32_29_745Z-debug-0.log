@@ -7,18 +7,13 @@
 6 silly config load:file:D:\newproject\argus-platform\frontend\softnodejsnode_global\etc\npmrc
 7 verbose title npm run build
 8 verbose argv "run" "build"
-9 verbose logfile logs-max:10 dir:D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-17T01_47_07_556Z-
-10 verbose logfile D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-17T01_47_07_556Z-debug-0.log
-11 silly logfile done cleaning log files
-12 http fetch GET 200 https://registry.npmjs.org/npm 251ms
+9 verbose logfile logs-max:10 dir:D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-18T01_32_29_745Z-
+10 verbose logfile D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-18T01_32_29_745Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly logfile done cleaning log files
 13 verbose cwd D:\newproject\argus-platform\frontend
 14 verbose os Windows_NT 10.0.26200
 15 verbose node v24.14.0
 16 verbose npm  v11.9.0
-17 notice
-17 notice New minor version of npm available! 11.9.0 -> 11.19.0
-17 notice Changelog: https://github.com/npm/cli/releases/tag/v11.19.0
-17 notice To update run: npm install -g npm@11.19.0
-17 notice  { force: true, Symbol(proc-log.meta): true }
-18 verbose exit 0
-19 info ok
+17 verbose exit 0
+18 info ok

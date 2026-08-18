@@ -7,6 +7,7 @@
 6 silly config load:file:D:\newproject\argus-platform\frontend\softnodejsnode_global\etc\npmrc
 7 verbose title npm run dev
 8 verbose argv "run" "dev"
-9 verbose logfile logs-max:10 dir:D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-17T01_52_38_263Z-
-10 verbose logfile D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-17T01_52_38_263Z-debug-0.log
-11 silly logfile done cleaning log files
+9 verbose logfile logs-max:10 dir:D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-18T01_34_11_486Z-
+10 verbose logfile D:\newproject\argus-platform\frontend\softnodejsnode_cache\_logs\2026-08-18T01_34_11_486Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly logfile done cleaning log files
