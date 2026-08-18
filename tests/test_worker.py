@@ -10,6 +10,7 @@ import io
 import uuid
 
 import pytest
+from arq import Retry
 from langchain_core.documents import Document as LCDocument
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from pypdf import PdfWriter
@@ -87,9 +88,10 @@ async def test_happy_path_to_ready(
     assert rows[0]["company"] == company_id
 
 
-async def test_blank_pdf_fails_on_final_try(
+async def test_blank_pdf_fails_at_first_try(
     session_factory: Factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """无可提取文本是终态错误：重试改变不了结果，首试即落 failed，不占重试额度。"""
     doc_id, _owner, _company, object_key = await _make_document(session_factory)
     writer = PdfWriter()
     writer.add_blank_page(width=595, height=842)
@@ -98,32 +100,51 @@ async def test_blank_pdf_fails_on_final_try(
     put_bytes(object_key, buf.getvalue(), "application/pdf")
     monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
 
-    result = await worker_mod.ingest_document({"job_try": worker_mod.MAX_TRIES}, doc_id)
+    result = await worker_mod.ingest_document({"job_try": 1}, doc_id)
 
-    assert result == "failed:ValueError"
+    assert result == "failed:NoTextError"
     status, error = await _get_status(session_factory, doc_id)
     assert status == "failed"
     assert error is not None
     assert "无可提取文本" in error
 
 
-async def test_retriable_error_reraises(
+def _boom(_b: bytes, _s: str, _c: str) -> list[LCDocument]:
+    msg = "transient network error"
+    raise RuntimeError(msg)
+
+
+async def test_transient_error_raises_arq_retry(
     session_factory: Factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """非终试的可重试错误必须抛 arq.Retry——普通异常 arq 不会重投（源码实证）。"""
     doc_id, _owner, _company, object_key = await _make_document(session_factory)
     put_bytes(object_key, b"%PDF-placeholder", "application/pdf")
     monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
-
-    def _boom(_b: bytes, _s: str, _c: str) -> list[LCDocument]:
-        msg = "transient network error"
-        raise RuntimeError(msg)
-
     monkeypatch.setattr(worker_mod, "_load_pages", _boom)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(Retry):
         await worker_mod.ingest_document({"job_try": 1}, doc_id)
     status, _error = await _get_status(session_factory, doc_id)
     assert status == "parsing"
+
+
+async def test_transient_error_fails_on_final_try(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重试耗尽：落 failed + 处置记录，交给人工重试端点。"""
+    doc_id, _owner, _company, object_key = await _make_document(session_factory)
+    put_bytes(object_key, b"%PDF-placeholder", "application/pdf")
+    monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
+    monkeypatch.setattr(worker_mod, "_load_pages", _boom)
+
+    result = await worker_mod.ingest_document({"job_try": worker_mod.MAX_TRIES}, doc_id)
+
+    assert result == "failed:RuntimeError"
+    status, error = await _get_status(session_factory, doc_id)
+    assert status == "failed"
+    assert error is not None
+    assert "transient network error" in error
 
 
 async def test_missing_document(

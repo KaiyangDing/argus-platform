@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import ClassVar
 
 import structlog
+from arq import Retry
 from arq.connections import RedisSettings
 from langchain_core.documents import Document as LCDocument
 from sqlalchemy import update
@@ -30,6 +31,10 @@ log = structlog.get_logger()
 
 JOB_TIMEOUT = 30 * 60  # 解析+embedding 按分钟计，大文档给足
 MAX_TRIES = 3
+
+
+class NoTextError(ValueError):
+    """PDF 无可提取文本：终态错误，重试改变不了结果。"""
 
 
 def _load_pages(pdf_bytes: bytes, source_id: str, company_key: str) -> list[LCDocument]:
@@ -71,7 +76,7 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
         await _set_status(doc_id, "chunking")
         chunks = await asyncio.to_thread(split_pages, pages)
         if not chunks:
-            raise ValueError("PDF 无可提取文本（扫描件或空文档）")
+            raise NoTextError("PDF 无可提取文本（扫描件或空文档）")
 
         await _set_status(doc_id, "embedding")
         added = await asyncio.to_thread(
@@ -81,12 +86,22 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
         await _set_status(doc_id, "ready")
         log.info("document_ready", document_id=document_id, chunks=added)
         return f"ready:{added}"
+    except NoTextError as exc:
+        await _set_status(doc_id, "failed", error=f"NoTextError: {exc}")
+        log.warning("document_failed", document_id=document_id, error=str(exc))
+        return "failed:NoTextError"
     except Exception as exc:
         if ctx.get("job_try", 1) >= MAX_TRIES:
             await _set_status(doc_id, "failed", error=f"{type(exc).__name__}: {exc}")
             log.warning("document_failed", document_id=document_id, error=str(exc))
             return f"failed:{type(exc).__name__}"
-        raise
+        log.warning(
+            "document_retrying",
+            document_id=document_id,
+            error=str(exc),
+            job_try=ctx.get("job_try", 1),
+        )
+        raise Retry(defer=10) from exc
 
 
 async def shutdown(ctx: dict) -> None:
