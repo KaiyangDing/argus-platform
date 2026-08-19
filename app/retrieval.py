@@ -6,6 +6,9 @@
 - 深池 HYBRID_POOL=200 先检索、融合后再切 k：RRF 在小池下会稀释单路命中
 - 产品差异：per-company 索引天然单公司，SearchFn 的 company 参数仅保
   签名兼容（图代码不动），闭包已绑定公司
+- v0.2 返工新增：检索结果统一回贴 section 面包屑——向量库 dump 是入库时的
+  旧快照（旧块 metadata 无 section），chunks.jsonl 是最新事实源；回贴让
+  旧索引免重嵌即获面包屑，新旧块一致（回贴幂等）
 分层：build_hybrid_search 纯内存（单测直测），make_company_search 做 IO 组装。
 """
 
@@ -42,16 +45,30 @@ def rows_to_documents(rows: list[dict[str, object]]) -> list[Document]:
 
 
 def build_hybrid_search(
-    docs: list[Document], store: InMemoryVectorStore, pool: int = HYBRID_POOL
+    docs: list[Document],
+    store: InMemoryVectorStore,
+    pool: int = HYBRID_POOL,
+    section_map: dict[str, str] | None = None,
 ) -> SearchFn:
-    """BM25 建索引一次（jieba 分词是大头），向量与融合按查询现组（轻量）。"""
+    """BM25 建索引一次（jieba 分词是大头），向量与融合按查询现组（轻量）。
+
+    section_map（chunk_id→章节头）来自最新 chunks.jsonl；命中结果统一回贴，
+    BM25 路与向量路的 Document 口径一致。
+    """
     bm25 = BM25Retriever.from_documents(docs, preprocess_func=jieba_tokenize)
     bm25.k = pool
 
     def search(query: str, _slug: str, k: int) -> list[Document]:
         vector = store.as_retriever(search_kwargs={"k": pool})
         hybrid = EnsembleRetriever(retrievers=[bm25, vector], weights=[0.5, 0.5])
-        return hybrid.invoke(query)[:k]
+        out = hybrid.invoke(query)[:k]
+        if section_map is not None:
+            for doc in out:
+                cid = str(doc.metadata.get("chunk_id", ""))
+                doc.metadata["section"] = section_map.get(
+                    cid, doc.metadata.get("section", "")
+                )
+        return out
 
     return search
 
@@ -73,4 +90,5 @@ def make_company_search(
         return empty
 
     store = load_company_store(owner_id, company_id, embeddings)
-    return build_hybrid_search(docs, store, pool)
+    section_map = {str(r["chunk_id"]): str(r.get("section", "")) for r in rows}
+    return build_hybrid_search(docs, store, pool, section_map=section_map)

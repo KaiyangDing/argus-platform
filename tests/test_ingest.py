@@ -12,7 +12,10 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from pypdf import PdfWriter
 
 from app.ingest import (
+    annotate_page_sections,
     append_to_index,
+    chunks_to_rows,
+    corpus_profile,
     load_company_rows,
     load_company_store,
     load_pdf_pages,
@@ -127,3 +130,50 @@ def test_append_is_idempotent_per_source(_test_db: None) -> None:
 
     rows = load_company_rows(owner, company)
     assert len(rows) == first
+
+
+def test_annotate_page_sections_running_heads() -> None:
+    """跨页运行章节头状态机：编号标题/括号次级/报表名/千分位表行守卫。"""
+    pages = [
+        _page("s-11111111", "c1", 1, "封面说明\n一、公司简介\n本公司主营……"),
+        _page("s-11111111", "c1", 2, "5、应收账款\n3、2,345,678\n其他内容"),
+        _page("s-11111111", "c1", 3, "（1）按账龄披露\n一年以内 1,234,567"),
+        _page("s-11111111", "c1", 4, "延续上一页的表格数字"),
+        _page("s-11111111", "c1", 5, "母公司资产负债表\n货币资金 999"),
+        _page("s-11111111", "c1", 6, "延续母公司报表"),
+    ]
+    annotate_page_sections(pages)
+    assert [p.metadata["section"] for p in pages] == [
+        "",  # 首页：进入本页前无标题
+        "一、公司简介",  # 跨页运行头
+        "5、应收账款",  # 表行「3、2,345,678」被千分位守卫拦下，不当标题
+        "5、应收账款 / （1）按账龄披露",  # 括号级=次级，不覆盖主标题
+        "5、应收账款 / （1）按账龄披露",
+        "母公司资产负债表",  # 报表名设 major 并清 minor
+    ]
+
+
+def test_split_inherits_section_into_rows() -> None:
+    pages = [
+        _page("s-11111111", "c1", 1, "一、经营情况\n" + "营业收入稳步增长。" * 40),
+        _page("s-11111111", "c1", 2, "第二页内容。" * 30),
+    ]
+    annotate_page_sections(pages)
+    rows = chunks_to_rows(split_pages(pages))
+    assert all("section" in r for r in rows)
+    assert all(
+        r["section"] == "一、经营情况" for r in rows if r["page"] == 2
+    )  # 标题在前页、正文在后页的场景
+
+
+def test_corpus_profile_years_and_fallbacks() -> None:
+    p = corpus_profile(["李子园2024年年报.pdf", "2023年监管公告.pdf"])
+    assert "可用文档 2 份" in p
+    assert "覆盖年份：2023、2024" in p
+    assert "最新年份：2024" in p
+
+    assert corpus_profile([]) == "该公司暂无语料。"
+
+    p2 = corpus_profile(["招股说明书.pdf"])
+    assert "未知（先以宽泛查询探明时间范围）" in p2
+    assert "最新年份：未知" in p2

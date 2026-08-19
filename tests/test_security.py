@@ -66,7 +66,7 @@ def test_wrong_secret_rejected() -> None:
             "iat": now,
             "exp": now + timedelta(minutes=5),
         },
-        "attacker-secret",
+        "attacker-secret-0123456789abcdef",  # ≥32 字节：只测「密钥不对」，不连带触发短密钥告警
     )
     assert decode_token(token, "access") is None
 

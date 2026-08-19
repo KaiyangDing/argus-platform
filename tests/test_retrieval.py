@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.vectorstores import InMemoryVectorStore
 
-from app.ingest import append_to_index, split_pages
+from app.ingest import annotate_page_sections, append_to_index, split_pages
 from app.retrieval import (
     build_hybrid_search,
     jieba_tokenize,
@@ -118,3 +118,42 @@ def test_make_company_search_roundtrip(_test_db: None) -> None:
     hits = search("营业收入增长", "ignored", 4)
     assert hits
     assert hits[0].metadata["source_id"] == "rt-11111111"
+
+
+def test_build_hybrid_search_pastes_section() -> None:
+    docs = _corpus_docs()
+    store = InMemoryVectorStore(_fake())
+    store.add_documents(docs)
+    smap = {"d-00000000:0": "合并利润表"}  # 其余 chunk 不在表里 = 旧行无 section 的形态
+    search = build_hybrid_search(docs, store, pool=50, section_map=smap)
+
+    hits = search("营业收入同比增长多少", "ignored", 5)
+    by_id = {h.metadata["chunk_id"]: h for h in hits}
+    assert by_id["d-00000000:0"].metadata["section"] == "合并利润表"
+    others = [h for cid, h in by_id.items() if cid != "d-00000000:0"]
+    assert others
+    assert all(h.metadata["section"] == "" for h in others)  # 查不到 → 兜底空串
+
+
+def test_company_search_section_roundtrip(_test_db: None) -> None:
+    """端到端：带标题页入库 → MinIO 往返 → 命中结果携带 section 面包屑。"""
+    owner, company = str(uuid.uuid4()), str(uuid.uuid4())
+    pages = [
+        Document(
+            page_content="一、经营情况回顾\n概述。",
+            metadata={"source_id": "sec-11111111", "company": company, "page": 1},
+        ),
+        Document(
+            page_content="本年度营业收入显著增长，主要来自线上渠道扩张。" * 20,
+            metadata={"source_id": "sec-11111111", "company": company, "page": 2},
+        ),
+    ]
+    annotate_page_sections(pages)
+    chunks = split_pages(pages)
+    append_to_index(owner, company, chunks, embeddings=_fake())
+
+    search = make_company_search(owner, company, _fake())
+    hits = search("营业收入增长", "ignored", 4)
+    page2 = [h for h in hits if h.metadata["page"] == 2]
+    assert page2
+    assert all(h.metadata["section"] == "一、经营情况回顾" for h in page2)

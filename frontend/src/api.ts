@@ -172,6 +172,7 @@ export type EvidenceRef = {
   chunk_id: string
   source_id: string
   page: number
+  section?: string // 章节面包屑（v0.2 面包屑之前入库的证据没有该键）
   text: string
 }
 

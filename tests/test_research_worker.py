@@ -18,14 +18,14 @@ import app.worker as worker_mod
 from app.config import get_settings
 from app.ingest import append_to_index, split_pages
 from app.models import Company, ResearchTask, User
-from app.research import AspectPlan, AspectSpec, QueryList
+from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
 
 Factory = async_sessionmaker[AsyncSession]
 
 _PLAN = AspectPlan(
     aspects=[
-        AspectSpec(name="财务表现", focus="营收如何"),
-        AspectSpec(name="公司治理", focus="股权如何"),
+        AspectSpec(name="财务表现", focus="营收如何", key_questions=["营收多少"]),
+        AspectSpec(name="公司治理", focus="股权如何", key_questions=["股权结构"]),
     ]
 )
 
@@ -43,6 +43,11 @@ def _struct_factory(model_cls: type[BaseModel]) -> _StructStub:
         return _StructStub(_PLAN)
     if model_cls is QueryList:
         return _StructStub(QueryList(queries=["查询一", "查询二"]))
+    if model_cls is Reflection:
+        # core_chunk_ids 留空 → 图侧回退按入库序取核心证据，worker 测试不关心精选
+        return _StructStub(Reflection(done=True, core_chunk_ids=[]))
+    if model_cls is ReviewVerdict:
+        return _StructStub(ReviewVerdict(need_more=False, followups=[]))
     raise AssertionError(f"未预期的结构化请求：{model_cls}")
 
 
@@ -84,7 +89,16 @@ async def test_run_research_zero_evidence_to_done(
     ctx = {
         "job_try": 1,
         "embeddings": DeterministicFakeEmbedding(size=1024),
-        "chat": FakeListChatModel(responses=["边界：语料为空"]),
+        # 零证据仍有 5 次非结构化调用：一致性核对 + 要点/关联/风险/边界四终稿
+        "chat": FakeListChatModel(
+            responses=[
+                "冲突核对：无。",
+                "要点占位",
+                "关联占位",
+                "风险占位",
+                "边界：语料为空",
+            ]
+        ),
         "struct_factory": _struct_factory,
     }
     result = await worker_mod.run_research(ctx, task_id)
@@ -103,6 +117,7 @@ async def test_run_research_zero_evidence_to_done(
     assert nodes.count("researcher") == 2
     assert "supervisor" in nodes
     assert "merge" in nodes
+    assert "review" in nodes
     assert "write" in nodes
 
 
@@ -126,8 +141,19 @@ async def test_run_research_with_corpus_records_evidence(
     ctx = {
         "job_try": 1,
         "embeddings": DeterministicFakeEmbedding(size=1024),
+        # chat 序：digest×2 → 一致性核对 → 节×2 → 要点/关联/风险/边界
         "chat": FakeListChatModel(
-            responses=["小结甲", "小结乙", "正文 [1]。", "正文 [2]。", "边界说明"]
+            responses=[
+                "备忘录甲",
+                "备忘录乙",
+                "冲突核对：无。",
+                "正文 [1]。",
+                "正文 [2]。",
+                "要点",
+                "关联",
+                "风险",
+                "边界说明",
+            ]
         ),
         "struct_factory": _struct_factory,
     }

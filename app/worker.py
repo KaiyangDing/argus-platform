@@ -9,6 +9,7 @@ max_jobs=1:索引"载入-追加-回写"非原子，串行排除同公司并发�
 
 import asyncio
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import ClassVar
@@ -16,14 +17,18 @@ from typing import ClassVar
 import structlog
 from arq import Retry
 from arq.connections import RedisSettings
+from arq.worker import func as arq_func
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document as LCDocument
 from redis.asyncio import Redis
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 
 from app.config import get_settings
 from app.db import SessionFactory, engine
 from app.ingest import (
+    annotate_page_sections,
     append_to_index,
+    corpus_profile,
     load_pdf_pages,
     make_embeddings,
     make_source_id,
@@ -51,7 +56,9 @@ def _load_pages(pdf_bytes: bytes, source_id: str, company_key: str) -> list[LCDo
     with tempfile.TemporaryDirectory() as tmp:
         pdf_path = Path(tmp) / f"{source_id}.pdf"
         pdf_path.write_bytes(pdf_bytes)
-        return load_pdf_pages(pdf_path, source_id, company_key)
+        pages = load_pdf_pages(pdf_path, source_id, company_key)
+    annotate_page_sections(pages)  # 跨页章节面包屑：只进 metadata，免重嵌
+    return pages
 
 
 async def _set_status(doc_id: uuid.UUID, status: str, error: str | None = None) -> None:
@@ -114,6 +121,45 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
         raise Retry(defer=10) from exc
 
 
+class LLMCallLogger(BaseCallbackHandler):
+    """调用级观测：每次 LLM 调用的节点/耗时/错误打进 worker 日志。
+
+    看不到 openai 客户端内部的静默重试，但「start 后迟迟无 end」本身就是
+    正在重试/慢跑的信号——黑盒静默事故（v0.2 首跑 19 分钟无声）的解药。
+    """
+
+    def __init__(self) -> None:
+        self._started: dict[object, tuple[str, float]] = {}
+
+    def on_chat_model_start(
+        self,
+        _serialized: dict,
+        _messages: list,
+        *,
+        run_id: object,
+        metadata: dict | None = None,
+        **_kw: object,
+    ) -> None:
+        node = (metadata or {}).get("langgraph_node", "?")
+        self._started[run_id] = (node, time.monotonic())
+        log.info("llm_call_start", node=node)
+
+    def on_llm_end(self, _response: object, *, run_id: object, **_kw: object) -> None:
+        node, t0 = self._started.pop(run_id, ("?", time.monotonic()))
+        log.info("llm_call_end", node=node, seconds=round(time.monotonic() - t0, 1))
+
+    def on_llm_error(
+        self, error: BaseException, *, run_id: object, **_kw: object
+    ) -> None:
+        node, t0 = self._started.pop(run_id, ("?", time.monotonic()))
+        log.warning(
+            "llm_call_error",
+            node=node,
+            seconds=round(time.monotonic() - t0, 1),
+            error=str(error),
+        )
+
+
 def _describe(node: str, payload: dict) -> str:
     if node == "supervisor":
         aspects = payload.get("aspects", [])
@@ -125,6 +171,12 @@ def _describe(node: str, payload: dict) -> str:
         return f"「{f.get('name', '?')}」研究完成，证据 {len(f.get('evidence', []))} 条"
     if node == "merge":
         return f"证据归并完成：全局 {len(payload.get('evidence', []))} 条"
+    if node == "review":
+        followups = payload.get("followup_aspects") or []
+        if followups:
+            names = "、".join(a["name"] for a in followups)
+            return f"复审：补派 {len(followups)} 项补充研究（{names}）"
+        return "复审通过，无补派"
     if node == "write":
         return "报告撰写完成"
     return node
@@ -143,6 +195,13 @@ async def run_research(ctx: dict, task_id: str) -> str:
         company_key = str(task.company_id)
         company = await session.get(Company, task.company_id)
         company_name = company.name if company else company_key
+        result = await session.execute(
+            select(Document.filename).where(
+                Document.company_id == task.company_id,
+                Document.status == "ready",
+            )
+        )
+        profile = corpus_profile(list(result.scalars()))
 
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
     stream_key = f"research:events:{task_id}"
@@ -158,7 +217,11 @@ async def run_research(ctx: dict, task_id: str) -> str:
                 .values(status="running")
             )
             await session.commit()
-        await emit("start", "研究任务开始")
+        attempt = ctx.get("job_try", 1)
+        await emit(
+            "start",
+            f"研究任务开始（第 {attempt} 次尝试）" if attempt > 1 else "研究任务开始",
+        )
 
         embeddings = ctx.get("embeddings") or make_embeddings()
         chat = ctx.get("chat") or make_chat()
@@ -171,8 +234,14 @@ async def run_research(ctx: dict, task_id: str) -> str:
 
         report: str | None = None
         evidence: list[dict[str, object]] | None = None
-        state = {"company": company_name, "slug": company_key}
-        async for chunk in graph.astream(state, stream_mode="updates"):
+        state = {
+            "company": company_name,
+            "slug": company_key,
+            "corpus_profile": profile,
+        }
+        async for chunk in graph.astream(
+            state, {"callbacks": [LLMCallLogger()]}, stream_mode="updates"
+        ):
             for node, payload in chunk.items():
                 data = payload if isinstance(payload, dict) else {}
                 if node == "merge":
@@ -200,6 +269,9 @@ async def run_research(ctx: dict, task_id: str) -> str:
         await redis.expire(stream_key, 3600)
         log.info("research_done", task_id=task_id)
         return "done"
+    except asyncio.CancelledError:
+        await emit("retrying", "任务被取消（超时或 worker 重启），等待自动重跑")
+        raise
     except Exception as exc:
         if ctx.get("job_try", 1) >= MAX_TRIES:
             async with SessionFactory() as session:
@@ -228,7 +300,10 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions: ClassVar[list] = [ingest_document, run_research]
+    functions: ClassVar[list] = [
+        ingest_document,
+        arq_func(run_research, timeout=60 * 60),
+    ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_shutdown = shutdown
     max_jobs = 1
