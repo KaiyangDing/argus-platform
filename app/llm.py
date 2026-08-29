@@ -19,6 +19,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from app.config import get_settings
+from app.fakes import FakeChat
 
 DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 CHAT_MODEL = "qwen-flash"
@@ -27,11 +28,16 @@ EMBED_MODEL = "text-embedding-v4"
 
 def make_chat(
     model: str = CHAT_MODEL, temperature: float = 0.0, timeout: float = 240.0
-) -> ChatOpenAI:
+) -> BaseChatModel:
+    settings = get_settings()
+    if settings.fake_llm:
+        # 压测线 B（ADR-011）：开关下沉在工厂里，deps / chat 路由 / worker
+        # 所有注入点零改动统一生效
+        return FakeChat(delay_s=settings.fake_llm_delay_s)
     return ChatOpenAI(
         model=model,
         base_url=DASHSCOPE_COMPAT_BASE,
-        api_key=get_settings().dashscope_api_key,
+        api_key=settings.dashscope_api_key,
         temperature=temperature,
         timeout=timeout,
         max_retries=2,

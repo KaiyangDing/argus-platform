@@ -47,6 +47,45 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
 
     uv run pytest
 
+## 压测（P3.3 基线）
+
+两线口径（ADR-011；工具与手册在 scripts/loadtest/）：**线 A** 真模型单用户
+小样本记真实体验；**线 B** `ARGUS_FAKE_LLM=1` 全 fake（0.5s/调用模拟时延）
++ locust 并发压自家壳层。单机全家桶（压测器 / app / worker / PG / Redis /
+MinIO 同机），读路径尾部含资源争抢的间接效应。
+
+线 A（qwen-flash 真跑，研究走含复审补派的完整路径）：chat 首字 6.5~7.6s、
+全程约 8s、每轮 ≈¥0.001；研究端到端 20.8 分钟、¥0.236（445k in /
+113k out，记账 missing_calls=0）。
+
+线 B（每档 3 分钟；429=0，失败率 ≤0.4% 且均为档尾硬切竞态）：
+
+| 指标 | u10 | u20 | u40 |
+|---|---|---|---|
+| 总吞吐 req/s | 3.1 | 6.2 | 7.0 |
+| 读路径 P50 / P95 | 6~12 / 18~42 ms | 7~11 / 21~32 ms | 9~13 ms / 3.8~13 s |
+| chat 首 delta P50 / P95 | 1.1 / 1.2 s | 1.1 / 1.2 s | 1.1 / 9.8 s |
+| research e2e P50 / max | 12 / 26 s | 17 / 32 s | 61 / 107 s |
+
+基线定位（处方均排 P3.4，复测同参数对比）：
+
+- **worker 串行**（max_jobs=1）：research 纯执行 ≈6.5s（三档 min 一致），
+  P50 12→17→61s 全是排队；用户 u20→u40 翻倍吞吐仅 +13%，饱和点在
+  u20~u40 之间。
+- **每请求全量重载 per-company 索引**：u40 下 chat 尾部与读路径 P90+
+  秒级劣化而 P50 不动——CPU / 线程池争抢的指纹（pgvector 迁移后消失）。
+- 三道闸（HTTP 频率 / 业务配额 / SSE 并发）在并发下全部按设计生效。
+
+压测战果（两个真问题，比数字值钱）：
+
+1. **SseGate 槽位泄漏 bug**：客户端在流终止前断开（关页面 / 刷新 / 压测
+   硬切）时，release 挂在 async generator 的 finally 上不被及时执行——
+   5 次断开即把该用户 429 锁 30 分钟（TTL 自愈）。修复 = release 挪
+   StreamingResponse 的 BackgroundTask；最小复现与修复验证器
+   scripts/loadtest/probe_sse_leak.py。
+2. **压测执行纪律**：档间残留（SSE 槽悬空、arq 残队）会污染下一档数字——
+   locustfile 内置 test_start/test_stop 清槽钩子，手册含档间排空检查。
+
 ## 进度
 
 - [x] P1.1 骨架与编排
@@ -64,4 +103,7 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
 - [x] P3.2 限流与流式韧性（HTTP 频率闸 per-user/IP + SSE 并发闸 + 业务配额
       三层分工；对话流生产/消费解耦：断线续写、块间 120s / 全程 300s 超时
       预算自守；测试 Redis 隔离 db1；ADR-009/010）
-- [ ] P3 其余（压测基线 / 索引迁 pgvector / 熔断降级 / 可观测与复测收官）
+- [x] P3.3 压测基线（两线口径：真跑体验数字 + fake 压壳 u10/u20/u40 三档
+      QPS 与分位数；定位 worker 串行与索引重载两大瓶颈；抓获 SSE 槽位
+      泄漏 bug；ADR-011）
+- [ ] P3 其余（索引迁 pgvector + 并发化 / 熔断降级 / 可观测与复测收官）

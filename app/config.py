@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     price_out_per_mtok: Decimal = Decimal("1.5")
     budget_cny_24h: Decimal = Decimal(20)
     max_running_research: int = 2
+    # P3.3 压测线 B（ADR-011）：LLM 与 embedding 全换确定性 fake（零 API
+    # 成本零外部依赖），只压自家壳层；delay 模拟单次调用时延，让任务时长
+    # 与队列形态接近真实，而不是瞬间完成什么都压不出来
+    fake_llm: bool = False
+    fake_llm_delay_s: float = 0.5
 
 
 @lru_cache

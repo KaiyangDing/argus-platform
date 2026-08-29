@@ -17,6 +17,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
+from starlette.background import BackgroundTask
 from typing import Annotated
 
 import structlog
@@ -255,15 +256,16 @@ async def chat(
         raise
 
     async def gen() -> AsyncIterator[str]:
-        try:
-            while (event := await queue.get()) is not None:
-                yield _sse(event)
-        finally:
-            # 断开只走到这：还槽即止，生产端继续活到落库完成
-            await sse_gate.release(user_key)
+        while (event := await queue.get()) is not None:
+            yield _sse(event)
 
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
+        # 还槽走 BackgroundTask 而非 gen 的 finally：客户端在流终止前断开时，
+        # 悬空 async generator 的 finally 不被及时执行（P3.3 压测抓获：断开
+        # 5 次即锁用户 30 分钟）；starlette 保证 background 在响应结束（含
+        # 断开）后必执行。释放只此一处，双释放会误删他人在用的槽计数。
+        background=BackgroundTask(sse_gate.release, user_key),
     )

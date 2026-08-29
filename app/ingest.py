@@ -23,7 +23,7 @@ import tempfile
 from pathlib import Path
 
 from langchain_core.documents import Document
-from langchain_core.embeddings import Embeddings
+from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -35,6 +35,7 @@ from app.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
 from app.storage import get_bytes, put_bytes
 
 EMBED_BATCH = 10
+EMBED_DIM = 1024  # text-embedding-v4 输出维度（fake 向量按此对齐）
 
 # 中文语料分隔符优先级：段落 > 换行 > 句读 > 空格 > 硬切
 SEPARATORS = ["\n\n", "\n", "。", "；", "，", " ", ""]
@@ -42,11 +43,15 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
 
-def make_embeddings() -> OpenAIEmbeddings:
+def make_embeddings() -> Embeddings:
+    settings = get_settings()
+    if settings.fake_llm:
+        # 压测线 B：确定性向量零 API 调用；查询与索引同分布，相似度检索行为正常
+        return DeterministicFakeEmbedding(size=EMBED_DIM)
     return OpenAIEmbeddings(
         model=EMBED_MODEL,
         base_url=DASHSCOPE_COMPAT_BASE,
-        api_key=get_settings().dashscope_api_key,
+        api_key=settings.dashscope_api_key,
         check_embedding_ctx_length=False,
         chunk_size=EMBED_BATCH,
     )

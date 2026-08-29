@@ -74,7 +74,9 @@ def test_make_chat_pins_timeout_and_retries(monkeypatch: pytest.MonkeyPatch) -> 
     错杀进重试循环（2026-08-19 首跑事故）；挂死可见性由 LLMCallLogger 补位。
     """
     monkeypatch.setattr(
-        llm_mod, "get_settings", lambda: SimpleNamespace(dashscope_api_key="test-key")
+        llm_mod,
+        "get_settings",
+        lambda: SimpleNamespace(dashscope_api_key="test-key", fake_llm=False),
     )
     chat = make_chat()
     assert chat.request_timeout == 240.0

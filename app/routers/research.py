@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections.abc import AsyncIterator
+from starlette.background import BackgroundTask
 from typing import Annotated
 
 from arq.connections import ArqRedis
@@ -105,28 +106,27 @@ async def research_events(
     stream_key = f"research:events:{task_id}"
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
 
+    async def cleanup() -> None:
+        await redis.aclose()
+        await sse_gate.release(user_key)
+
     async def gen() -> AsyncIterator[str]:
         last_id = "0"
-        try:
-            while True:
-                batches = await redis.xread(
-                    {stream_key: last_id}, block=15000, count=100
-                )
-                if not batches:
-                    yield ": keepalive\n\n"
-                    continue
-                for _stream, entries in batches:
-                    for entry_id, fields in entries:
-                        last_id = entry_id
-                        yield f"data: {json.dumps(fields, ensure_ascii=False)}\n\n"
-                        if fields.get("node") in ("done", "failed"):
-                            return
-        finally:
-            await redis.aclose()
-            await sse_gate.release(user_key)
+        while True:
+            batches = await redis.xread({stream_key: last_id}, block=15000, count=100)
+            if not batches:
+                yield ": keepalive\n\n"
+                continue
+            for _stream, entries in batches:
+                for entry_id, fields in entries:
+                    last_id = entry_id
+                    yield f"data: {json.dumps(fields, ensure_ascii=False)}\n\n"
+                    if fields.get("node") in ("done", "failed"):
+                        return
 
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
+        background=BackgroundTask(cleanup),  # 同 chat：断开也保证 aclose + 还槽
     )
