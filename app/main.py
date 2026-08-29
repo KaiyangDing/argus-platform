@@ -16,6 +16,7 @@ from app.config import Settings, get_settings
 from app.db import engine
 from app.logs import setup_logging
 from app.routers.auth import router as auth_router
+from app.routers.chat import router as chat_router
 from app.routers.companies import router as companies_router
 from app.routers.research import router as research_router
 from app.storage import ensure_bucket
@@ -37,6 +38,7 @@ app = FastAPI(title="Argus Platform", version="0.1.0", lifespan=lifespan)
 app.include_router(auth_router)
 app.include_router(companies_router)
 app.include_router(research_router)
+app.include_router(chat_router)
 
 
 async def _check_postgres(settings: Settings) -> None:

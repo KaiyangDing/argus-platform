@@ -56,5 +56,6 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
 - [x] P1.5 研究任务中心与报告呈现（多 Agent 研究图 + SSE 实时进度 + 引用校验报告）
 - [x] P1 返工：argus-lg v0.2 结论同步（多轮 researcher / 复审补派 / 三层研报 /
       章节面包屑 / 语料概况注入 / pypdf 直读 / RetryingStruct + RetryPolicy 硬化）
-- [ ] P2 追问对话
+- [x] P2 追问对话（condense 查询改写 → 同语料混合检索 → 带 [n] 引用回答；
+      token 级 SSE 流式；messages 持久化；报告页内嵌对话界面）
 - [ ] P3 工程硬化

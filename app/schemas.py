@@ -72,3 +72,19 @@ class ResearchTaskSummary(BaseModel):
 class ResearchTaskOut(ResearchTaskSummary):
     report_md: str | None
     evidence: list[dict[str, object]] | None
+
+
+class ChatIn(BaseModel):
+    model_config = {"str_strip_whitespace": True}
+
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class MessageOut(BaseModel):
+    id: uuid.UUID
+    role: str
+    content: str
+    evidence: list[dict[str, object]] | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

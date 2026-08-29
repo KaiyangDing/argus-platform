@@ -37,8 +37,8 @@ function renderTextWithRefs(text: string, maxRef: number, keyPrefix: string): Re
   return parts
 }
 
-/** 行内渲染：先按 **加粗** 分段，段内再做 [n] 引用处理。 */
-function renderInline(text: string, maxRef: number, keyPrefix: string): ReactNode[] {
+/** 行内渲染：先按 **加粗** 分段，段内再做 [n] 引用处理（ChatPanel 复用）。 */
+export function renderInline(text: string, maxRef: number, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = []
   const re = /\*\*([^*]+)\*\*/g
   let last = 0

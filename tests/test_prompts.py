@@ -6,6 +6,8 @@
 
 from app.prompts import (
     BOUNDARY_PROMPT,
+    CHAT_ANSWER_PROMPT,
+    CONDENSE_PROMPT,
     CONSISTENCY_PROMPT,
     DIGEST_PROMPT,
     EXEC_SUMMARY_PROMPT,
@@ -38,6 +40,8 @@ _EXPECTED = [
     (CONSISTENCY_PROMPT, {"company", "memos"}),
     (BOUNDARY_PROMPT, {"company", "body"}),
     (REVIEW_PROMPT, {"company", "memos", "questions"}),
+    (CONDENSE_PROMPT, {"company", "history", "question"}),
+    (CHAT_ANSWER_PROMPT, {"company", "history", "question", "evidence"}),
 ]
 
 

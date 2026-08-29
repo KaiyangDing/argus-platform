@@ -3,9 +3,11 @@ from typing import Annotated
 from arq.connections import ArqRedis
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from langchain_core.language_models import BaseChatModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.llm import make_chat
 from app.models import User
 from app.security import decode_token
 
@@ -34,3 +36,8 @@ async def get_current_user(
 
 def get_arq(request: Request) -> ArqRedis:
     return request.app.state.arq
+
+
+def get_chat_model() -> BaseChatModel:
+    """对话模型注入缝：产品用 make_chat()，端点测试 override 成 Fake。"""
+    return make_chat()

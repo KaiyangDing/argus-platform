@@ -201,14 +201,9 @@ export async function getResearch(taskId: string): Promise<ResearchTaskOut> {
 
 export type ResearchEvent = { node: string; detail: string }
 
-/** SSE 消费：fetch 流式读取（EventSource 带不了 Authorization 头）。 */
-export async function streamResearchEvents(
-  taskId: string,
-  onEvent: (e: ResearchEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const resp = await apiFetch(`/api/research/${taskId}/events`, { signal })
-  if (!resp.ok || !resp.body) throw await readError(resp)
+/** SSE 消费公共段：fetch 流式读取（EventSource 带不了 Authorization 头）。 */
+async function consumeSse(resp: Response, onData: (raw: string) => void): Promise<void> {
+  if (!resp.body) return
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -221,11 +216,55 @@ export async function streamResearchEvents(
       const raw = buffer.slice(0, idx)
       buffer = buffer.slice(idx + 2)
       for (const line of raw.split('\n')) {
-        if (line.startsWith('data:')) {
-          onEvent(JSON.parse(line.slice(5)) as ResearchEvent)
-        }
+        if (line.startsWith('data:')) onData(line.slice(5))
       }
       idx = buffer.indexOf('\n\n')
     }
   }
+}
+
+export async function streamResearchEvents(
+  taskId: string,
+  onEvent: (e: ResearchEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const resp = await apiFetch(`/api/research/${taskId}/events`, { signal })
+  if (!resp.ok || !resp.body) throw await readError(resp)
+  await consumeSse(resp, (raw) => onEvent(JSON.parse(raw) as ResearchEvent))
+}
+
+export type MessageOut = {
+  id: string
+  role: string
+  content: string
+  evidence: EvidenceRef[] | null
+  created_at: string
+}
+
+export async function listMessages(companyId: string): Promise<MessageOut[]> {
+  const resp = await apiFetch(`/api/companies/${companyId}/messages`)
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as MessageOut[]
+}
+
+export type ChatEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done'; message: MessageOut }
+  | { type: 'error'; detail: string }
+
+/** 追问：POST 后按 SSE 消费 token 级 delta 流，终态 done 携带落库消息。 */
+export async function streamChat(
+  companyId: string,
+  content: string,
+  onEvent: (e: ChatEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const resp = await apiFetch(`/api/companies/${companyId}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+    signal,
+  })
+  if (!resp.ok || !resp.body) throw await readError(resp)
+  await consumeSse(resp, (raw) => onEvent(JSON.parse(raw) as ChatEvent))
 }

@@ -10,6 +10,7 @@ import {
   type ResearchTaskOut,
   type ResearchTaskSummary,
 } from './api'
+import ChatPanel from './ChatPanel'
 import ReportView from './ReportView'
 
 const POLL_MS = 5000
@@ -225,6 +226,15 @@ export default function Research({ companyId }: Props) {
           }}
         >
           <ReportView report={detail.report_md} evidence={detail.evidence ?? []} />
+          <div
+            style={{
+              marginTop: 24,
+              borderTop: `1px solid ${COLORS.border}`,
+              paddingTop: 16,
+            }}
+          >
+            <ChatPanel companyId={companyId} />
+          </div>
         </div>
       )}
     </div>
