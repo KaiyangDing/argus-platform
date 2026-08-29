@@ -13,14 +13,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import get_session
 from app.deps import get_arq, get_current_user
+from app.limits import RESEARCH_PER_MIN, rate_limit, sse_gate
 from app.models import Document, ResearchTask, User
 from app.routers.companies import _get_own_company
 from app.schemas import ResearchTaskOut, ResearchTaskSummary
+from app.usage import enforce_quota
 
 router = APIRouter(prefix="/api", tags=["research"])
 
 
-@router.post("/companies/{company_id}/research", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/companies/{company_id}/research",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("research", RESEARCH_PER_MIN))],
+)
 async def start_research(
     company_id: uuid.UUID,
     user: Annotated[User, Depends(get_current_user)],
@@ -28,6 +34,7 @@ async def start_research(
     arq: Annotated[ArqRedis, Depends(get_arq)],
 ) -> ResearchTaskSummary:
     company = await _get_own_company(company_id, user, session)
+    await enforce_quota(session, user.id, need_slot=True)
     res = await session.execute(
         select(func.count())
         .select_from(Document)
@@ -89,6 +96,12 @@ async def research_events(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> StreamingResponse:
     await _get_own_task(task_id, user, session)
+    user_key = f"u:{user.id}"
+    if not await sse_gate.acquire(user_key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="同时在线的流式连接已达上限，请先关闭其他研究进度或对话窗口",
+        )
     stream_key = f"research:events:{task_id}"
     redis = Redis.from_url(get_settings().redis_url, decode_responses=True)
 
@@ -110,6 +123,7 @@ async def research_events(
                             return
         finally:
             await redis.aclose()
+            await sse_gate.release(user_key)
 
     return StreamingResponse(
         gen(),

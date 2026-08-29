@@ -1,6 +1,9 @@
+from decimal import Decimal
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEV_JWT_SECRET = "dev-secret-change-me-not-for-production!"
 
 
 class Settings(BaseSettings):
@@ -16,12 +19,20 @@ class Settings(BaseSettings):
     minio_access_key: str = "argus"
     minio_secret_key: str = "argusminio"
     minio_secure: bool = False
-    jwt_secret: str = "dev-secret-change-me-not-for-production!"
+    environment: str = "dev"  # dev 之外的值会启用启动时安全自检（main.lifespan）
+    jwt_secret: str = DEV_JWT_SECRET
     jwt_access_ttl_minutes: int = 15
     jwt_refresh_ttl_days: int = 7
     minio_bucket: str = "argus-documents"
     max_upload_mb: int = 50
     dashscope_api_key: str = ""
+    # P3.1 计价与配额：单价按「每百万 token」计（dashscope 定价页口径）。
+    # 默认值只是初值，首跑后按真实账单校准——记账要能拿去对账，
+    # 不能是拍脑袋的常数；校准只改 .env，不改代码。
+    price_in_per_mtok: Decimal = Decimal("0.15")
+    price_out_per_mtok: Decimal = Decimal("1.5")
+    budget_cny_24h: Decimal = Decimal(20)
+    max_running_research: int = 2
 
 
 @lru_cache

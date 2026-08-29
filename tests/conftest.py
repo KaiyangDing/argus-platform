@@ -18,15 +18,19 @@ from collections.abc import AsyncIterator
 import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 TEST_DB_URL = "postgresql://argus:argus@localhost:5432/argus_test"
 ADMIN_DB_URL = "postgresql://argus:argus@localhost:5432/postgres"
+TEST_REDIS_URL = "redis://localhost:6379/1"
 
 os.environ["ARGUS_DATABASE_URL"] = TEST_DB_URL
 os.environ["ARGUS_MINIO_BUCKET"] = "argus-test-documents"
+# 测试 Redis 隔离到 db 1（dev 的 arq 队列/事件流在 db 0），会话开局清空残留
+os.environ["ARGUS_REDIS_URL"] = TEST_REDIS_URL
 
 
 async def _create_db_and_tables() -> None:
@@ -48,6 +52,12 @@ async def _create_db_and_tables() -> None:
 
     # ASGITransport 不执行 lifespan，测试 bucket 在此确保
     await ensure_bucket()
+
+    redis = Redis.from_url(TEST_REDIS_URL)
+    try:
+        await redis.flushdb()
+    finally:
+        await redis.aclose()
 
 
 @pytest.fixture(scope="session")

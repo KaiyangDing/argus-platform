@@ -88,3 +88,15 @@ class MessageOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class UsageOut(BaseModel):
+    """展示口径：金额转 float 给前端省事；DB 里是 Numeric(12,6) 精确值。"""
+
+    window_hours: int
+    spend_cny: float
+    budget_cny: float
+    input_tokens: int
+    output_tokens: int
+    running_tasks: int
+    max_running: int

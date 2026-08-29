@@ -4,6 +4,7 @@ import { ApiError, clearTokens, fetchMe, getAccessToken, type UserOut } from './
 import Auth from './Auth'
 import Companies from './Companies'
 import HealthPanel from './HealthPanel'
+import UsagePanel from './UsagePanel'
 
 type AuthState =
   | { kind: 'checking' }
@@ -94,6 +95,7 @@ export default function App() {
           </button>
         </div>
       </div>
+      <UsagePanel />
       <Companies />
       <section style={{ marginTop: 32, borderTop: '1px solid #e5e7eb', paddingTop: 16 }}>
         <h2 style={{ fontSize: 15, color: '#6b7280', marginTop: 0 }}>系统状态</h2>

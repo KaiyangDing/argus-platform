@@ -1,10 +1,14 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     DateTime,
     ForeignKey,
+    Index,
+    Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -113,6 +117,40 @@ class Message(Base):
     evidence: Mapped[list[dict[str, object]] | None] = mapped_column(
         JSONB, nullable=True
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+USAGE_KINDS = ("research", "chat")
+
+
+class TokenUsage(Base):
+    """一次图执行的 token 账：研究任务一行、对话一轮一行。
+
+    ref_id 不设 FK：对话在 assistant 消息落库前失败也要记账（钱已经烧了），
+    那种行的 ref_id 为空；research 侧则总能指到 research_tasks.id。
+    by_node 是节点级明细，配额只用总额，明细留给 P3.6 的看板。
+    """
+
+    __tablename__ = "token_usage"
+    __table_args__ = (Index("ix_token_usage_owner_created", "owner_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("companies.id"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(20))
+    ref_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    model: Mapped[str] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer)
+    output_tokens: Mapped[int] = mapped_column(Integer)
+    cost_cny: Mapped[Decimal] = mapped_column(Numeric(12, 6))
+    missing_calls: Mapped[int] = mapped_column(Integer, server_default="0")
+    by_node: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

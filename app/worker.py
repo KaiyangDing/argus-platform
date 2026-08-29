@@ -34,12 +34,13 @@ from app.ingest import (
     make_source_id,
     split_pages,
 )
-from app.llm import make_chat
+from app.llm import CHAT_MODEL, make_chat
 from app.logs import setup_logging
 from app.models import Company, Document, ResearchTask
 from app.research import build_graph
 from app.retrieval import make_company_search
 from app.storage import get_bytes
+from app.usage import UsageCollector, record_usage
 
 setup_logging()
 log = structlog.get_logger()
@@ -209,6 +210,7 @@ async def run_research(ctx: dict, task_id: str) -> str:
     async def emit(node: str, detail: str) -> None:
         await redis.xadd(stream_key, {"node": node, "detail": detail}, maxlen=1000)
 
+    usage = UsageCollector(CHAT_MODEL)
     try:
         async with SessionFactory() as session:
             await session.execute(
@@ -240,7 +242,7 @@ async def run_research(ctx: dict, task_id: str) -> str:
             "corpus_profile": profile,
         }
         async for chunk in graph.astream(
-            state, {"callbacks": [LLMCallLogger()]}, stream_mode="updates"
+            state, {"callbacks": [LLMCallLogger(), usage]}, stream_mode="updates"
         ):
             for node, payload in chunk.items():
                 data = payload if isinstance(payload, dict) else {}
@@ -293,6 +295,19 @@ async def run_research(ctx: dict, task_id: str) -> str:
         raise Retry(defer=10) from exc
     finally:
         await redis.aclose()
+        try:
+            async with SessionFactory() as session:
+                await record_usage(
+                    session,
+                    owner_id=uuid.UUID(owner_key),
+                    company_id=uuid.UUID(company_key),
+                    kind="research",
+                    ref_id=tid,
+                    collector=usage,
+                )
+        except Exception:
+            # 记账失败不能吃掉任务本身的结果或异常；.exception 带 traceback（BLE001 豁免）
+            log.exception("usage_record_failed", task_id=task_id)
 
 
 async def shutdown(ctx: dict) -> None:

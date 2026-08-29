@@ -58,4 +58,10 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
       章节面包屑 / 语料概况注入 / pypdf 直读 / RetryingStruct + RetryPolicy 硬化）
 - [x] P2 追问对话（condense 查询改写 → 同语料混合检索 → 带 [n] 引用回答；
       token 级 SSE 流式；messages 持久化；报告页内嵌对话界面）
-- [ ] P3 工程硬化
+- [x] P3.1 成本与配额（token_usage 记账：研究一任务一行 / 对话一轮一行，
+      节点级明细与 missing_calls；24h 滚动预算闸 + 研究并发槽闸 → 429；
+      /api/usage 与前端用量条；ADR-008）
+- [x] P3.2 限流与流式韧性（HTTP 频率闸 per-user/IP + SSE 并发闸 + 业务配额
+      三层分工；对话流生产/消费解耦：断线续写、块间 120s / 全程 300s 超时
+      预算自守；测试 Redis 隔离 db1；ADR-009/010）
+- [ ] P3 其余（压测基线 / 索引迁 pgvector / 熔断降级 / 可观测与复测收官）

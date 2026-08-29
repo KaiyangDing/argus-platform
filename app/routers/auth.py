@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import get_current_user
+from app.limits import LOGIN_PER_MIN, REFRESH_PER_MIN, REGISTER_PER_MIN, rate_limit
 from app.models import User
 from app.schemas import LoginIn, RefreshIn, RegisterIn, TokenPair, UserOut
 from app.security import (
@@ -28,7 +29,11 @@ def _token_pair(user_id: uuid.UUID) -> TokenPair:
     )
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/register",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("register", REGISTER_PER_MIN))],
+)
 async def register(
     body: RegisterIn, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> TokenPair:
@@ -43,7 +48,7 @@ async def register(
     return _token_pair(user.id)
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(rate_limit("login", LOGIN_PER_MIN))])
 async def login(
     body: LoginIn, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> TokenPair:
@@ -56,7 +61,7 @@ async def login(
     return _token_pair(user.id)
 
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(rate_limit("refresh", REFRESH_PER_MIN))])
 async def refresh(body: RefreshIn) -> TokenPair:
     user_id = decode_token(body.refresh_token, "refresh")
     if user_id is None:

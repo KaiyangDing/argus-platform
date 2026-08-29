@@ -39,5 +39,9 @@ def get_arq(request: Request) -> ArqRedis:
 
 
 def get_chat_model() -> BaseChatModel:
-    """对话模型注入缝：产品用 make_chat()，端点测试 override 成 Fake。"""
-    return make_chat()
+    """对话模型注入缝：产品用 make_chat()，端点测试 override 成 Fake。
+
+    timeout 30s 是交互口径：qwen-flash 单轮秒级，30 已是 P99 包络；研究图
+    的 240s 防错杀逻辑不适用于「用户正在等」的路径（ADR-010 阈值推导起点）。
+    """
+    return make_chat(timeout=30.0)

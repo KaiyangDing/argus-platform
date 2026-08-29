@@ -25,14 +25,19 @@ CHAT_MODEL = "qwen-flash"
 EMBED_MODEL = "text-embedding-v4"
 
 
-def make_chat(model: str = CHAT_MODEL, temperature: float = 0.0) -> ChatOpenAI:
+def make_chat(
+    model: str = CHAT_MODEL, temperature: float = 0.0, timeout: float = 240.0
+) -> ChatOpenAI:
     return ChatOpenAI(
         model=model,
         base_url=DASHSCOPE_COMPAT_BASE,
         api_key=get_settings().dashscope_api_key,
         temperature=temperature,
-        timeout=240.0,
+        timeout=timeout,
         max_retries=2,
+        # dashscope 是非默认 base_url，ChatOpenAI 的自动开关不生效
+        # （base.py:1231-1250 只对默认端点自动开）——不显式开则流式无 usage
+        stream_usage=True,
     )
 
 

@@ -268,3 +268,20 @@ export async function streamChat(
   if (!resp.ok || !resp.body) throw await readError(resp)
   await consumeSse(resp, (raw) => onEvent(JSON.parse(raw) as ChatEvent))
 }
+
+export type UsageOut = {
+  window_hours: number
+  spend_cny: number
+  budget_cny: number
+  input_tokens: number
+  output_tokens: number
+  running_tasks: number
+  max_running: number
+}
+
+/** 账户级用量与配额（24 小时滚动窗口）。 */
+export async function fetchUsage(): Promise<UsageOut> {
+  const resp = await apiFetch('/api/usage')
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as UsageOut
+}

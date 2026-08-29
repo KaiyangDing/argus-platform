@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.db import get_session
 from app.deps import get_arq, get_current_user
+from app.limits import UPLOAD_PER_MIN, rate_limit
 from app.models import Company, Document, User
 from app.schemas import CompanyIn, CompanyOut, DocumentOut
 from app.storage import put_pdf
@@ -77,7 +78,11 @@ async def list_documents(
     return [DocumentOut.model_validate(d) for d in res.scalars()]
 
 
-@router.post("/{company_id}/documents", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{company_id}/documents",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit("upload", UPLOAD_PER_MIN))],
+)
 async def upload_document(
     company_id: uuid.UUID,
     file: UploadFile,
