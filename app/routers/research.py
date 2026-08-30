@@ -1,7 +1,6 @@
 import json
 import uuid
 from collections.abc import AsyncIterator
-from starlette.background import BackgroundTask
 from typing import Annotated
 
 from arq.connections import ArqRedis
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from redis.asyncio import Redis
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.config import get_settings
 from app.db import get_session

@@ -1,159 +1,160 @@
-"""检索层单测：分词、行转换、混合检索形状。纯内存为主，MinIO 只走空索引与往返。
+"""SQL 内混合检索（P3.4 批2）：词法 OR-tsquery + 向量 HNSW + RRF 融合。
 
-BM25 侧用真实词频（jieba 分词后可验证强命中），向量侧 Fake embedding
-只保证确定性排名——断言聚焦"混合检索返回形状与 BM25 强命中在场"。
+数据经 store_chunks 走真测试库；向量全程 DeterministicFakeEmbedding——
+同文本同向量的确定性让「向量距离 0」可精确构造，RRF 名次断言不靠运气：
+全部块都进向量深池（各有向量名次分），词法独中的块必然两路得分居首。
 """
 
 import uuid
 
-from langchain_core.documents import Document
+import pytest
+from langchain_core.documents import Document as LCDocument
 from langchain_core.embeddings import DeterministicFakeEmbedding
-from langchain_core.vectorstores import InMemoryVectorStore
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ingest import annotate_page_sections, append_to_index, split_pages
-from app.retrieval import (
-    build_hybrid_search,
-    jieba_tokenize,
-    make_company_search,
-    rows_to_documents,
-)
+import app.worker as worker_mod
+from app.ingest import embed_chunks
+from app.models import Company, Document, User
+from app.retrieval import make_company_search
+
+Factory = async_sessionmaker[AsyncSession]
 
 EMBED_DIM = 1024
+
+# 文本刻意互斥用词（连「的」都避开）：词法命中的归属在断言里可推理
+TEXTS = [
+    "甲烷传感器业务毛利率百分之四十。",
+    "经营活动现金流量净额充足且稳定。",
+    "人力成本上升构成主要经营风险。",
+]
 
 
 def _fake() -> DeterministicFakeEmbedding:
     return DeterministicFakeEmbedding(size=EMBED_DIM)
 
 
-def test_jieba_tokenize_chinese() -> None:
-    tokens = jieba_tokenize("永辉超市的营业收入同比增长")
-    # jieba 词典粒度：营业收入 → 营业+收入；两侧同一分词器，粒度一致即可对撞
-    assert "营业" in tokens
-    assert "收入" in tokens
-    assert len(tokens) > 3
-    assert all(t.strip() for t in tokens)
+class _NoCallEmbeddings(DeterministicFakeEmbedding):
+    def embed_query(self, text: str) -> list[float]:
+        raise AssertionError("空语料必须短路，不该触发 embed_query")
 
 
-def test_rows_to_documents() -> None:
-    rows: list[dict[str, object]] = [
-        {
-            "chunk_id": "a-11111111:0",
-            "source_id": "a-11111111",
-            "company": "c1",
-            "page": 3,
-            "seq": 0,
-            "text": "第三页的内容。",
-        }
-    ]
-    docs = rows_to_documents(rows)
-    assert len(docs) == 1
-    assert docs[0].id == "a-11111111:0"
-    assert docs[0].page_content == "第三页的内容。"
-    assert docs[0].metadata["page"] == 3
-    assert "seq" not in docs[0].metadata
+async def _seed_company(
+    factory: Factory, texts: list[str], monkeypatch: pytest.MonkeyPatch
+) -> tuple[str, str]:
+    """user→company→document→chunks 全链入库；返回 (owner_key, company_key)。"""
+    monkeypatch.setattr(worker_mod, "SessionFactory", factory)
+    async with factory() as session:
+        user = User(email=f"{uuid.uuid4().hex}@example.com", password_hash="x")
+        session.add(user)
+        await session.flush()
+        company = Company(owner_id=user.id, name=f"co-{uuid.uuid4().hex[:8]}")
+        session.add(company)
+        await session.flush()
+        doc = Document(
+            owner_id=user.id,
+            company_id=company.id,
+            filename="r.pdf",
+            object_key="k.pdf",
+            sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+            size_bytes=1,
+            status="ready",
+        )
+        session.add(doc)
+        await session.commit()
+        owner_id, company_id, document_id = user.id, company.id, doc.id
 
-
-def _corpus_docs() -> list[Document]:
-    texts = [
-        "公司二零二四年营业收入为八百亿元，同比增长百分之十二。",
-        "董事会审议通过了新的股权激励计划，覆盖核心技术人员。",
-        "华东区域新开门店四十家，供应链中心投入使用。",
-        "公司发布可持续发展报告，披露碳排放数据。",
-        "监事会对年度内部控制评价报告无异议。",
-    ]
-    return [
-        Document(
-            id=f"d-0000000{i}:0",
-            page_content=t,
+    source = f"r-{uuid.uuid4().hex[:8]}"
+    chunks = [
+        LCDocument(
+            page_content=text,
             metadata={
-                "source_id": f"d-0000000{i}",
-                "company": "c1",
-                "page": 1,
-                "chunk_id": f"d-0000000{i}:0",
+                "source_id": source,
+                "company": str(company_id),
+                "page": i + 1,
+                "seq": i,
+                "chunk_id": f"{source}:{i}",
+                "section": "第一节 概况" if i == 0 else "",
             },
         )
-        for i, t in enumerate(texts)
+        for i, text in enumerate(texts)
     ]
-
-
-def test_build_hybrid_search_shape_and_bm25_hit() -> None:
-    docs = _corpus_docs()
-    store = InMemoryVectorStore(_fake())
-    store.add_documents(docs)
-    search = build_hybrid_search(docs, store, pool=50)
-
-    hits = search("营业收入同比增长多少", "ignored-slug", 3)
-    assert 0 < len(hits) <= 3
-    assert all(isinstance(h, Document) for h in hits)
-    # BM25 强词命中（营业收入/同比增长双词匹配）必须进入融合结果
-    assert any("营业收入" in h.page_content for h in hits)
-
-
-def test_hybrid_search_k_truncation() -> None:
-    docs = _corpus_docs()
-    store = InMemoryVectorStore(_fake())
-    store.add_documents(docs)
-    search = build_hybrid_search(docs, store, pool=50)
-    assert len(search("公司经营情况", "ignored", 2)) == 2
-
-
-def test_make_company_search_empty_corpus(_test_db: None) -> None:
-    search = make_company_search(str(uuid.uuid4()), str(uuid.uuid4()), _fake())
-    assert search("任何查询", "ignored", 5) == []
-
-
-def test_make_company_search_roundtrip(_test_db: None) -> None:
-    owner, company = str(uuid.uuid4()), str(uuid.uuid4())
-    chunks = split_pages(
-        [
-            Document(
-                page_content="本年度营业收入显著增长，主要来自线上渠道扩张。" * 20,
-                metadata={"source_id": "rt-11111111", "company": company, "page": 1},
-            )
-        ]
+    await worker_mod.store_chunks(
+        owner_id, company_id, document_id, chunks, embed_chunks(chunks, _fake())
     )
-    append_to_index(owner, company, chunks, embeddings=_fake())
+    return str(owner_id), str(company_id)
 
+
+async def test_lexical_hit_ranks_first(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """词法独中的块居首：它独得词法名次分，且与其他块一样有向量名次分。"""
+    owner, company = await _seed_company(session_factory, TEXTS, monkeypatch)
     search = make_company_search(owner, company, _fake())
-    hits = search("营业收入增长", "ignored", 4)
-    assert hits
-    assert hits[0].metadata["source_id"] == "rt-11111111"
+    out = search("甲烷传感器毛利率如何", company, 3)
+    assert out
+    assert out[0].page_content == TEXTS[0]
+    assert out[0].metadata["section"] == "第一节 概况"
 
 
-def test_build_hybrid_search_pastes_section() -> None:
-    docs = _corpus_docs()
-    store = InMemoryVectorStore(_fake())
-    store.add_documents(docs)
-    smap = {"d-00000000:0": "合并利润表"}  # 其余 chunk 不在表里 = 旧行无 section 的形态
-    search = build_hybrid_search(docs, store, pool=50, section_map=smap)
-
-    hits = search("营业收入同比增长多少", "ignored", 5)
-    by_id = {h.metadata["chunk_id"]: h for h in hits}
-    assert by_id["d-00000000:0"].metadata["section"] == "合并利润表"
-    others = [h for cid, h in by_id.items() if cid != "d-00000000:0"]
-    assert others
-    assert all(h.metadata["section"] == "" for h in others)  # 查不到 → 兜底空串
-
-
-def test_company_search_section_roundtrip(_test_db: None) -> None:
-    """端到端：带标题页入库 → MinIO 往返 → 命中结果携带 section 面包屑。"""
-    owner, company = str(uuid.uuid4()), str(uuid.uuid4())
-    pages = [
-        Document(
-            page_content="一、经营情况回顾\n概述。",
-            metadata={"source_id": "sec-11111111", "company": company, "page": 1},
-        ),
-        Document(
-            page_content="本年度营业收入显著增长，主要来自线上渠道扩张。" * 20,
-            metadata={"source_id": "sec-11111111", "company": company, "page": 2},
-        ),
-    ]
-    annotate_page_sections(pages)
-    chunks = split_pages(pages)
-    append_to_index(owner, company, chunks, embeddings=_fake())
-
+async def test_identical_text_vector_hit(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """query 与某块全文相同：确定性 fake 下向量距离为 0，该块必居首。"""
+    owner, company = await _seed_company(session_factory, TEXTS, monkeypatch)
     search = make_company_search(owner, company, _fake())
-    hits = search("营业收入增长", "ignored", 4)
-    page2 = [h for h in hits if h.metadata["page"] == 2]
-    assert page2
-    assert all(h.metadata["section"] == "一、经营情况回顾" for h in page2)
+    out = search(TEXTS[1], company, 3)
+    assert out[0].page_content == TEXTS[1]
+
+
+async def test_or_semantics_partial_match_still_hits(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OR 组词语义：查询里一堆词只有部分命中，词法路仍然计分（AND 会整路打灭）。"""
+    owner, company = await _seed_company(session_factory, TEXTS, monkeypatch)
+    search = make_company_search(owner, company, _fake())
+    # 「人力成本」「风险」只在 TEXTS[2]；「境外收购」全库无命中
+    out = search("境外收购带来人力成本与整合风险", company, 3)
+    assert out[0].page_content == TEXTS[2]
+
+
+async def test_k_truncates_after_fusion(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner, company = await _seed_company(session_factory, TEXTS, monkeypatch)
+    search = make_company_search(owner, company, _fake())
+    assert len(search("现金流量与毛利率", company, 2)) == 2
+
+
+async def test_metadata_contract_fields(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SearchFn 契约的 metadata 字段齐全（doc_to_ref 的输入面）。"""
+    owner, company = await _seed_company(session_factory, TEXTS, monkeypatch)
+    search = make_company_search(owner, company, _fake())
+    doc = search("毛利率", company, 1)[0]
+    for key in ("chunk_id", "source_id", "company", "page", "section"):
+        assert key in doc.metadata
+    assert doc.metadata["company"] == company
+
+
+async def test_empty_corpus_short_circuits(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空语料恒空函数：不打 embed_query（研究图空语料路径省十几次白调）。"""
+    owner, company = await _seed_company(session_factory, [], monkeypatch)
+    search = make_company_search(owner, company, _NoCallEmbeddings(size=EMBED_DIM))
+    assert search("任意问题", company, 5) == []
+
+
+async def test_company_isolation(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner_a, company_a = await _seed_company(session_factory, TEXTS, monkeypatch)
+    _owner_b, company_b = await _seed_company(
+        session_factory, ["另一家公司专属内容。"], monkeypatch
+    )
+    search_a = make_company_search(owner_a, company_a, _fake())
+    out = search_a("另一家公司专属内容", company_a, 5)
+    assert all(doc.metadata["company"] == company_a for doc in out)
+    assert all("另一家" not in doc.page_content for doc in out)
+    assert company_b != company_a

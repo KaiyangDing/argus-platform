@@ -1,7 +1,8 @@
-"""追问对话图：纯函数面 + 全 Fake 端到端（condense 跳过 / 零证据 / token 级流式）。
+"""追问对话图：纯函数面 + 全 Fake 端到端（检索式改写 / 零证据 / token 级流式）。
 
-FakeListChatModel 响应序与图内调用一一对应：有历史时 condense 消耗第 1 条、
-answer 消耗第 2 条；跳过分支用「不应被调用」哨兵证明零消耗（FakeListChatModel
+FakeListChatModel 响应序与图内调用一一对应：condense 消耗第 1 条（P3.4 起
+**首问也改写**——泛问词面不与语料对撞的验收实证）、answer 消耗第 2 条；
+零证据分支用「不应被调用」哨兵证明 answer 零消耗（FakeListChatModel
 耗尽后循环回到首条而非报错，断言"哨兵未浮出"比断言队列长度可靠）。
 token 级流式按 stream_mode=["messages", "updates"] 双模式消费：
 messages 供 token（metadata.langgraph_node 过滤节点），updates 供终态。
@@ -39,7 +40,9 @@ def test_render_history_strips_citations() -> None:
     assert "[1]" not in out  # 历史里的编号属各自轮次的证据表，留着会诱导错引
 
 
-def test_first_question_skips_condense() -> None:
+def test_first_question_condensed_to_search_query() -> None:
+    """首问也过改写：泛问「财务表现如何」词面不与利润表对撞（三只松鼠实证），
+    condense 负责翻译成语料里会出现的指标词，检索用改写结果而非原问。"""
     seen: list[str] = []
 
     def search(query: str, slug: str, k: int) -> list[Document]:
@@ -47,12 +50,14 @@ def test_first_question_skips_condense() -> None:
         seen.append(query)
         return [_doc("c1", "营收证据")]
 
-    chat = FakeListChatModel(responses=["营收为 5 亿元 [1]。"])
+    chat = FakeListChatModel(
+        responses=["营业收入 净利润 毛利率", "营收为 5 亿元 [1]。"]
+    )
     graph = build_chat_graph(chat, search).compile()
-    out = graph.invoke({"company": "测试公司", "slug": "t", "question": "营收多少"})
+    out = graph.invoke({"company": "测试公司", "slug": "t", "question": "财务表现如何"})
 
-    assert seen == ["营收多少"]  # 无历史：原问直接检索，不烧 condense 调用
-    assert out["condensed"] == "营收多少"
+    assert seen == ["营业收入 净利润 毛利率"]  # 检索用改写后的查询式，不用原问
+    assert out["condensed"] == "营业收入 净利润 毛利率"
     assert out["answer"] == "营收为 5 亿元 [1]。"
 
 
@@ -96,7 +101,7 @@ def test_retrieve_dedupes_by_chunk_id() -> None:
     def search(query: str, slug: str, k: int) -> list[Document]:
         return [_doc("c1", "一"), _doc("c2", "二"), _doc("c1", "一的重复")]
 
-    chat = FakeListChatModel(responses=["回答 [1][2]。"])
+    chat = FakeListChatModel(responses=["改写查询", "回答 [1][2]。"])
     graph = build_chat_graph(chat, search).compile()
     out = graph.invoke({"company": "测试公司", "slug": "t", "question": "问"})
 

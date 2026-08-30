@@ -17,7 +17,6 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from starlette.background import BackgroundTask
 from typing import Annotated
 
 import structlog
@@ -26,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from langchain_core.language_models import BaseChatModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.chat import HISTORY_LIMIT, ChatMsg, build_chat_graph
 from app.db import SessionFactory, get_session
@@ -53,7 +53,8 @@ _producers: set[asyncio.Task[None]] = set()
 
 
 def _build_search(owner_key: str, company_key: str) -> SearchFn:
-    """索引载入 + SearchFn 组装（测试在此打桩，绕开 MinIO 与真 embedding）。"""
+    """SearchFn 组装（测试在此打桩，绕开 DB 与真 embedding）。
+    P3.4 后只剩一次 EXISTS + 闭包组装，旧的 MinIO 全量索引载入已消失。"""
     return make_company_search(owner_key, company_key, make_embeddings())
 
 
@@ -108,7 +109,6 @@ async def _produce(
     usage = UsageCollector(CHAT_MODEL)
     deadline = time.monotonic() + CHAT_TOTAL_TIMEOUT
     try:
-        # 索引载入不在块间超时内（本地 IO，P3.4 迁 pgvector 后消失），受总预算外的
         # 事实上限约束：MinIO 读 + 反序列化，分钟级语料秒级完成
         search = await asyncio.to_thread(_build_search, owner_key, company_key)
         graph = build_chat_graph(chat_model, search).compile()

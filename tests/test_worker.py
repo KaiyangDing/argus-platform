@@ -14,11 +14,11 @@ from arq import Retry
 from langchain_core.documents import Document as LCDocument
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from pypdf import PdfWriter
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
-from app.ingest import load_company_rows
-from app.models import Company, Document, User
+from app.models import Chunk, Company, Document, User
 from app.storage import put_bytes
 
 Factory = async_sessionmaker[AsyncSession]
@@ -69,7 +69,7 @@ def _fake_pages(source_id: str, company_key: str) -> list[LCDocument]:
 async def test_happy_path_to_ready(
     session_factory: Factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    doc_id, owner_id, company_id, object_key = await _make_document(session_factory)
+    doc_id, _owner_id, company_id, object_key = await _make_document(session_factory)
     put_bytes(object_key, b"%PDF-placeholder", "application/pdf")
     monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
     monkeypatch.setattr(
@@ -83,9 +83,14 @@ async def test_happy_path_to_ready(
     status, error = await _get_status(session_factory, doc_id)
     assert status == "ready"
     assert error is None
-    rows = load_company_rows(owner_id, company_id)
-    assert rows
-    assert rows[0]["company"] == company_id
+    async with session_factory() as session:
+        res = await session.execute(
+            select(Chunk).where(Chunk.company_id == uuid.UUID(company_id))
+        )
+        chunks = list(res.scalars())
+    assert chunks
+    assert chunks[0].document_id == uuid.UUID(doc_id)
+    assert chunks[0].embedding is not None
 
 
 async def test_blank_pdf_fails_at_first_try(

@@ -2,7 +2,8 @@
 
 任务全链:queued → parsing → chunking → embedding → ready | failed。
 管线本体是同步函数（ingest.py），逐段甩 asyncio.to_thread，不堵 worker 事件循环。
-max_jobs=1:索引"载入-追加-回写"非原子，串行排除同公司并发交错。
+max_jobs=4：chunks 行级 INSERT + ON CONFLICT 天然并发安全（P3.4 迁 pgvector
+后旧索引对象的"载入-追加-回写"竞态结构性消失），入库与研究并行不悖。
 重试策略:非终试异常向上抛、由 arq 自动重投（瞬时故障自愈）；
 终试（job_try >= MAX_TRIES）落 failed + error 处置记录，等人工重试。
 """
@@ -11,6 +12,7 @@ import asyncio
 import tempfile
 import time
 import uuid
+from itertools import batched
 from pathlib import Path
 from typing import ClassVar
 
@@ -22,21 +24,23 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document as LCDocument
 from redis.asyncio import Redis
 from sqlalchemy import func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import get_settings
-from app.db import SessionFactory, engine
+from app.db import SessionFactory, engine, sync_engine
 from app.ingest import (
     annotate_page_sections,
-    append_to_index,
     corpus_profile,
+    embed_chunks,
     load_pdf_pages,
     make_embeddings,
     make_source_id,
     split_pages,
+    tokenize_for_search,
 )
 from app.llm import CHAT_MODEL, make_chat
 from app.logs import setup_logging
-from app.models import Company, Document, ResearchTask
+from app.models import Chunk, Company, Document, ResearchTask
 from app.research import build_graph
 from app.retrieval import make_company_search
 from app.storage import get_bytes
@@ -72,6 +76,51 @@ async def _set_status(doc_id: uuid.UUID, status: str, error: str | None = None) 
         await session.commit()
 
 
+async def store_chunks(
+    owner_id: uuid.UUID,
+    company_id: uuid.UUID,
+    document_id: uuid.UUID,
+    chunks: list[LCDocument],
+    vectors: list[list[float]],
+) -> int:
+    """块与向量入 chunks 表；返回实际插入数。
+
+    幂等靠 (company_id, chunk_id) 唯一约束 + ON CONFLICT DO NOTHING：
+    旧 MinIO 索引的幂等是读全量 jsonl 查 source_id（应用层、有竞态窗口），
+    换成数据库约束后行级兜底、并发安全——max_jobs 敢放开的根据。
+    """
+    inserted = 0
+    async with SessionFactory() as session:
+        for batch in batched(zip(chunks, vectors, strict=True), 100):
+            rows = [
+                {
+                    "owner_id": owner_id,
+                    "company_id": company_id,
+                    "document_id": document_id,
+                    "chunk_id": doc.metadata["chunk_id"],
+                    "source_id": doc.metadata["source_id"],
+                    "page": doc.metadata["page"],
+                    "seq": doc.metadata["seq"],
+                    "section": doc.metadata.get("section", ""),
+                    "text": doc.page_content,
+                    "text_tokens": func.to_tsvector(
+                        "simple", tokenize_for_search(doc.page_content)
+                    ),
+                    "embedding": vec,
+                }
+                for doc, vec in batch
+            ]
+            stmt = (
+                pg_insert(Chunk)
+                .values(rows)
+                .on_conflict_do_nothing(index_elements=["company_id", "chunk_id"])
+            )
+            res = await session.execute(stmt)
+            inserted += res.rowcount
+        await session.commit()
+    return inserted
+
+
 async def ingest_document(ctx: dict, document_id: str) -> str:
     doc_id = uuid.UUID(document_id)
     async with SessionFactory() as session:
@@ -97,8 +146,9 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
             raise NoTextError("PDF 无可提取文本（扫描件或空文档）")
 
         await _set_status(doc_id, "embedding")
-        added = await asyncio.to_thread(
-            append_to_index, owner_key, company_key, chunks, ctx.get("embeddings")
+        vectors = await asyncio.to_thread(embed_chunks, chunks, ctx.get("embeddings"))
+        added = await store_chunks(
+            uuid.UUID(owner_key), uuid.UUID(company_key), doc_id, chunks, vectors
         )
 
         await _set_status(doc_id, "ready")
@@ -312,6 +362,7 @@ async def run_research(ctx: dict, task_id: str) -> str:
 
 async def shutdown(ctx: dict) -> None:
     await engine.dispose()
+    sync_engine.dispose()
 
 
 class WorkerSettings:
@@ -321,6 +372,6 @@ class WorkerSettings:
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     on_shutdown = shutdown
-    max_jobs = 1
+    max_jobs = 4
     job_timeout = JOB_TIMEOUT
     max_tries = MAX_TRIES

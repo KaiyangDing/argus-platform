@@ -5,8 +5,8 @@
 后者走 arq worker、节点级进度事件（stream_mode="updates"）。
 两图共用证据工具（doc_to_ref / render_evidence_subset）与 SearchFn 契约。
 
-- condense：结合对话历史把追问改写成独立检索查询（消指代、补省略）；
-  无历史时直接用原问，不烧调用；
+- condense：把提问（含首问）改写成检索式查询——消解指代、把宽泛评价性
+  提问展开为语料词面（营业收入/净利润），研究图 QUERIES_PROMPT 的同款翻译层；
 - retrieve：SearchFn 契约检索同公司语料（与研究图同一套索引）；
 - answer：只依据本轮证据回答，句末 [n] 引用，证据不足必须明说；
   零证据固定文案直接回，不调 LLM。
@@ -65,13 +65,14 @@ def render_history(history: list[ChatMsg]) -> str:
 
 def build_chat_graph(chat: BaseChatModel, search: SearchFn) -> StateGraph:
     def condense(state: ChatState) -> dict[str, object]:
-        history = state.get("history") or []
-        if not history:
-            return {"condensed": state["question"]}  # 首问无指代，原问即独立查询
+        # 首问也过改写（三只松鼠验收实证：「财务表现如何」词面不与利润表
+        # 对撞，词法向量两路全空手）——泛问 → 检索式的翻译层，研究图靠
+        # QUERIES_PROMPT 做同一件事，chat 此前缺这一环；代价 = 首问多一次
+        # 秒级小调用
         msgs = CONDENSE_PROMPT.invoke(
             {
                 "company": state["company"],
-                "history": render_history(history),
+                "history": render_history(state.get("history") or []),
                 "question": state["question"],
             }
         )

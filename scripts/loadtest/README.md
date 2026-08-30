@@ -77,6 +77,5 @@ probe_sse_leak.py 用「done 即断开」姿势打 8 次 chat：泄漏时第 6 �
 - locust 单机单进程；多进程 worker 会复用账号，per-user 限流与 SSE
   槽位被摊薄，数字口径就变了。
 - 不压 /healthz（per-IP 限流防压测放大器，压它只能测出 429）。
-- 预期基线瓶颈（跑完对照）：research e2e 随并发线性恶化 = worker
-  max_jobs=1 全局串行；chat P95 里索引重载占比 = 每消息重载索引。
-  两者处方都在 P3.4（pgvector + 放开并发），复测同参数对比。
+- 基线两大瓶颈（worker 串行、每请求索引重载）已被 P3.4 治理并同参数
+  复测证实（README 压测节对比表）；后续复测继续用同款命令与档位。

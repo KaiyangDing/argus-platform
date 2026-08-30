@@ -9,30 +9,25 @@
   section / text
 - embedding：text-embedding-v4 经 dashscope OpenAI 兼容端点；
   check_embedding_ctx_length=False 必设；单请求批 10 条为端点上限
-- 索引：chunks.jsonl + InMemoryVectorStore dump，存 MinIO，对象键
-  {owner_id}/{company_id}/index/(chunks.jsonl|vectors.json)
+- 索引:chunks 表(pgvector + tsvector,P3.4 起)
 - corpus_profile：研究图时间锚先验的唯一来源，从 ready 文档文件名数据驱动生成
   （研究仓 v0.2 工程问题账「硬编码年份」条：产品语料任意上传，先验不可预设）
 
 本模块全部同步函数：worker 以 asyncio.to_thread 调用，单测直接调用。
 """
 
-import json
 import re
-import tempfile
 from pathlib import Path
 
+import jieba
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
-from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from minio.error import S3Error
 from pypdf import PdfReader
 
 from app.config import get_settings
 from app.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
-from app.storage import get_bytes, put_bytes
 
 EMBED_BATCH = 10
 EMBED_DIM = 1024  # text-embedding-v4 输出维度（fake 向量按此对齐）
@@ -55,6 +50,26 @@ def make_embeddings() -> Embeddings:
         check_embedding_ctx_length=False,
         chunk_size=EMBED_BATCH,
     )
+
+
+def tokenize_for_search(text: str) -> str:
+    """jieba 分词 → 空格串，交 to_tsvector('simple') 建词位与位置。
+
+    'simple' 配置不做词干化不删停用词——中文分词已在 Python 侧完成，PG 只
+    负责倒排与位置信息。位置是 ts_rank 的输入：直接把字符串 cast 成
+    tsvector 会丢位置，词法打分全废，必须走 to_tsvector。
+    """
+    return " ".join(tok for tok in jieba.lcut(text) if tok.strip())
+
+
+def embed_chunks(
+    chunks: list[Document], embeddings: Embeddings | None = None
+) -> list[list[float]]:
+    """全部块的向量（批 10 打端点）。与旧 append_to_index 的一体式不同：
+    嵌入与持久化拆开——ingest 保持纯计算零 DB 依赖，入库事务归 worker。"""
+    if embeddings is None:
+        embeddings = make_embeddings()
+    return embeddings.embed_documents([doc.page_content for doc in chunks])
 
 
 def make_source_id(filename: str, sha256: str) -> str:
@@ -156,77 +171,3 @@ def split_pages(pages: list[Document]) -> list[Document]:
         doc.metadata["seq"] = seq
         doc.metadata["chunk_id"] = f"{doc.metadata['source_id']}:{seq}"
     return chunks
-
-
-def chunks_to_rows(chunks: list[Document]) -> list[dict[str, object]]:
-    return [{**doc.metadata, "text": doc.page_content} for doc in chunks]
-
-
-def _index_keys(owner_id: str, company_id: str) -> tuple[str, str]:
-    prefix = f"{owner_id}/{company_id}/index"
-    return f"{prefix}/chunks.jsonl", f"{prefix}/vectors.json"
-
-
-def load_company_rows(owner_id: str, company_id: str) -> list[dict[str, object]]:
-    chunks_key, _ = _index_keys(owner_id, company_id)
-    try:
-        raw = get_bytes(chunks_key)
-    except S3Error as exc:
-        if exc.code == "NoSuchKey":
-            return []
-        raise
-    return [
-        json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()
-    ]
-
-
-def load_company_store(
-    owner_id: str, company_id: str, embeddings: Embeddings
-) -> InMemoryVectorStore:
-    _, vectors_key = _index_keys(owner_id, company_id)
-    try:
-        raw = get_bytes(vectors_key)
-    except S3Error as exc:
-        if exc.code == "NoSuchKey":
-            return InMemoryVectorStore(embeddings)
-        raise
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "vectors.json"
-        path.write_bytes(raw)
-        return InMemoryVectorStore.load(str(path), embeddings)
-
-
-def append_to_index(
-    owner_id: str,
-    company_id: str,
-    chunks: list[Document],
-    embeddings: Embeddings | None = None,
-) -> int:
-    """新文档的块并入公司索引并回写 MinIO；返回新增块数。
-
-    embeddings 是注入缝：测试传 DeterministicFakeEmbedding 零真调零花费；
-    生产走 None 分支。store.add_documents 是真 embedding 网络调用发生处
-    （按批 10 条打 dashscope）。
-    """
-    if embeddings is None:
-        embeddings = make_embeddings()
-
-    rows = load_company_rows(owner_id, company_id)
-
-    new_source = chunks[0].metadata["source_id"] if chunks else None
-    if any(r.get("source_id") == new_source for r in rows):
-        return 0  # 该文档已入库（上轮写完未置 ready 即崩的重跑），幂等跳过
-
-    store = load_company_store(owner_id, company_id, embeddings)
-
-    store.add_documents(chunks)
-    all_rows = rows + chunks_to_rows(chunks)
-
-    chunks_key, vectors_key = _index_keys(owner_id, company_id)
-    jsonl = "\n".join(json.dumps(r, ensure_ascii=False) for r in all_rows) + "\n"
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "vectors.json"
-        store.dump(str(path))
-        put_bytes(vectors_key, path.read_bytes(), "application/json")
-    put_bytes(chunks_key, jsonl.encode("utf-8"), "application/x-ndjson")
-    return len(chunks)

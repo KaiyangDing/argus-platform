@@ -14,7 +14,7 @@ from minio import Minio
 from redis.asyncio import Redis
 
 from app.config import DEV_JWT_SECRET, Settings, get_settings
-from app.db import engine
+from app.db import engine, sync_engine
 from app.limits import HEALTHZ_PER_MIN, rate_limit
 from app.logs import setup_logging
 from app.routers.auth import router as auth_router
@@ -45,6 +45,7 @@ async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
     FastAPILimiter.redis = None
     await limiter_redis.aclose()
     await engine.dispose()
+    sync_engine.dispose()
 
 
 app = FastAPI(title="Argus Platform", version="0.1.0", lifespan=lifespan)

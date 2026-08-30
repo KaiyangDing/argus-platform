@@ -1,76 +1,81 @@
-"""检索层：BM25(jieba) + 向量 + RRF 混合，深池检索再切 top-k。
+"""检索层（P3.4 批2）：SQL 内混合检索——词法 ts_rank + 向量 HNSW，RRF 融合。
 
-设计源自研究仓 S3 曲线结论（产品化重写）：
-- BM25Retriever 必挂 jieba preprocess_func——默认按空白切词，中文整句
-  成一个 token，检索直接退化（社区件中文隐坑）
-- 深池 HYBRID_POOL=200 先检索、融合后再切 k：RRF 在小池下会稀释单路命中
-- 产品差异：per-company 索引天然单公司，SearchFn 的 company 参数仅保
-  签名兼容（图代码不动），闭包已绑定公司
-- v0.2 返工新增：检索结果统一回贴 section 面包屑——向量库 dump 是入库时的
-  旧快照（旧块 metadata 无 section），chunks.jsonl 是最新事实源；回贴让
-  旧索引免重嵌即获面包屑，新旧块一致（回贴幂等）
-分层：build_hybrid_search 纯内存（单测直测），make_company_search 做 IO 组装。
+形态迁移：MinIO 双文件每请求全量载入、BM25 现建（jieba 分词全部块是
+u40 压测定位的 chat 尾部元凶）→ chunks 表持久索引（GIN 倒排 + HNSW），
+一条 SQL 出结果，每请求只剩 embed_query 一次 + 两路索引查询。
+
+口径（ADR-012）：
+- 查询侧 OR 组词不用 plainto——plainto 是 AND 语义，多词查询下词法路
+  整路打灭；OR 对齐 BM25「任一词命中即计分」；
+- ts_rank 非严格 BM25（无 IDF/长度归一）——RRF 只吃名次不吃分值，
+  可接受；检索质量以引擎仓评测口径为裁判；
+- 入库列与查询两侧同过 jieba + 'simple'，粒度一致即可对撞；
+- section 直接在行里，旧「检索层回贴」补丁整体退役。
+SearchFn 契约不变：(query, company, k) → list[Document]，图代码零感知。
 """
 
+import json
+import uuid
 from collections.abc import Callable
 
-import jieba
-from langchain_classic.retrievers import EnsembleRetriever
-from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_core.vectorstores import InMemoryVectorStore
+from sqlalchemy import text
 
-from app.ingest import load_company_rows, load_company_store
+from app.db import sync_engine
+from app.ingest import tokenize_for_search
 
 SearchFn = Callable[[str, str, int], list[Document]]
 
-HYBRID_POOL = 200
+HYBRID_POOL = 200  # 深池再融合：小池会稀释单路命中（研究仓 S3 结论）
+RRF_K = 60  # RRF 平滑常数，业界默认（与旧 EnsembleRetriever 同值）
+
+# 两路 CTE 各取深池名次，FULL OUTER JOIN 后 1/(K+rank) 相加再切 k。
+# 向量参数走 pgvector 文本格式 CAST，免每连接注册类型适配器；
+# :qts 为 NULL 时 to_tsquery 返回 NULL、@@ 判 NULL——词法路自然为空。
+_RRF_SQL = text("""
+WITH vec AS (
+    SELECT chunk_id, source_id, page, section, text,
+           row_number() OVER (ORDER BY embedding <=> CAST(:qvec AS vector)) AS rank
+    FROM chunks
+    WHERE owner_id = :owner_id AND company_id = :company_id
+    ORDER BY embedding <=> CAST(:qvec AS vector)
+    LIMIT :pool
+),
+lex AS (
+    SELECT chunk_id, source_id, page, section, text,
+           row_number() OVER (
+               ORDER BY ts_rank(text_tokens, to_tsquery('simple', :qts)) DESC
+           ) AS rank
+    FROM chunks
+    WHERE owner_id = :owner_id AND company_id = :company_id
+      AND text_tokens @@ to_tsquery('simple', :qts)
+    ORDER BY ts_rank(text_tokens, to_tsquery('simple', :qts)) DESC
+    LIMIT :pool
+)
+SELECT chunk_id,
+       COALESCE(v.source_id, l.source_id) AS source_id,
+       COALESCE(v.page, l.page) AS page,
+       COALESCE(v.section, l.section) AS section,
+       COALESCE(v.text, l.text) AS text,
+       COALESCE(1.0 / (:rrf_k + v.rank), 0)
+           + COALESCE(1.0 / (:rrf_k + l.rank), 0) AS score
+FROM vec v FULL OUTER JOIN lex l USING (chunk_id)
+ORDER BY score DESC, chunk_id
+LIMIT :k
+""")
 
 
-def jieba_tokenize(text: str) -> list[str]:
-    return [tok for tok in jieba.lcut(text) if tok.strip()]
+def to_or_tsquery(query: str) -> str | None:
+    """query 切词 → OR 组 tsquery 串；词加引号防 tsquery 特殊字符。
 
-
-def rows_to_documents(rows: list[dict[str, object]]) -> list[Document]:
-    """chunks.jsonl 行 → LC Document（id=chunk_id，metadata 取检索所需子集）。"""
-    return [
-        Document(
-            id=str(row["chunk_id"]),
-            page_content=str(row["text"]),
-            metadata={k: row[k] for k in ("source_id", "company", "page", "chunk_id")},
-        )
-        for row in rows
-    ]
-
-
-def build_hybrid_search(
-    docs: list[Document],
-    store: InMemoryVectorStore,
-    pool: int = HYBRID_POOL,
-    section_map: dict[str, str] | None = None,
-) -> SearchFn:
-    """BM25 建索引一次（jieba 分词是大头），向量与融合按查询现组（轻量）。
-
-    section_map（chunk_id→章节头）来自最新 chunks.jsonl；命中结果统一回贴，
-    BM25 路与向量路的 Document 口径一致。
+    无有效词返回 None（纯标点查询），SQL 侧 NULL 让词法路自然为空、
+    只走向量——与 P3.5 计划的「embedding 熔断 → 纯词法兜底」互为镜像。
     """
-    bm25 = BM25Retriever.from_documents(docs, preprocess_func=jieba_tokenize)
-    bm25.k = pool
-
-    def search(query: str, _slug: str, k: int) -> list[Document]:
-        vector = store.as_retriever(search_kwargs={"k": pool})
-        hybrid = EnsembleRetriever(retrievers=[bm25, vector], weights=[0.5, 0.5])
-        out = hybrid.invoke(query)[:k]
-        if section_map is not None:
-            for doc in out:
-                cid = str(doc.metadata.get("chunk_id", ""))
-                doc.metadata["section"] = section_map.get(
-                    cid, doc.metadata.get("section", "")
-                )
-        return out
-
-    return search
+    terms = [t for t in tokenize_for_search(query).split() if t]
+    if not terms:
+        return None
+    return " | ".join("'" + t.replace("'", "''") + "'" for t in terms)
 
 
 def make_company_search(
@@ -79,16 +84,57 @@ def make_company_search(
     embeddings: Embeddings,
     pool: int = HYBRID_POOL,
 ) -> SearchFn:
-    """载入公司索引并构建 SearchFn；语料为空返回恒空函数（图侧走零证据分支）。"""
-    rows = load_company_rows(owner_id, company_id)
-    docs = rows_to_documents(rows)
-    if not docs:
+    """签名与 MinIO 版一致，调用方零改动——「检索实现可整体替换而图
+    不知情」契约的兑现现场。空语料 EXISTS 短路：研究图空语料路径每方面
+    3 查询，不短路会白打十几次 embed_query。"""
+    owner_uuid, company_uuid = uuid.UUID(owner_id), uuid.UUID(company_id)
+    with sync_engine.connect() as conn:
+        has_chunks = conn.execute(
+            text(
+                "SELECT EXISTS(SELECT 1 FROM chunks"
+                " WHERE owner_id = :o AND company_id = :c)"
+            ),
+            {"o": owner_uuid, "c": company_uuid},
+        ).scalar()
+    if not has_chunks:
 
         def empty(_query: str, _slug: str, _k: int) -> list[Document]:
             return []
 
         return empty
 
-    store = load_company_store(owner_id, company_id, embeddings)
-    section_map = {str(r["chunk_id"]): str(r.get("section", "")) for r in rows}
-    return build_hybrid_search(docs, store, pool, section_map=section_map)
+    def search(query: str, _slug: str, k: int) -> list[Document]:
+        qvec = embeddings.embed_query(query)
+        with sync_engine.connect() as conn:
+            rows = (
+                conn.execute(
+                    _RRF_SQL,
+                    {
+                        "qvec": json.dumps(qvec),
+                        "qts": to_or_tsquery(query),
+                        "owner_id": owner_uuid,
+                        "company_id": company_uuid,
+                        "pool": pool,
+                        "rrf_k": RRF_K,
+                        "k": k,
+                    },
+                )
+                .mappings()
+                .all()
+            )
+        return [
+            Document(
+                id=str(r["chunk_id"]),
+                page_content=r["text"],
+                metadata={
+                    "chunk_id": r["chunk_id"],
+                    "source_id": r["source_id"],
+                    "company": company_id,
+                    "page": r["page"],
+                    "section": r["section"],
+                },
+            )
+            for r in rows
+        ]
+
+    return search

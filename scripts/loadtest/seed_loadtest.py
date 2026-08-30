@@ -3,9 +3,9 @@ ready 文档与检索索引。
 
 不走 API 铺数据：注册与上传各有限流、入库要过 worker 队列——用它们铺数据
 既慢，又把压测目标当成了铺路工具。这里复用生产管线函数（split_pages /
-append_to_index / hash_password / create_access_token），产物形态与真实
-入库零差别；幂等可重跑：用户/公司/文档按唯一键复用，索引按 source_id
-查重跳过。
+embed_chunks / store_chunks / hash_password / create_access_token），产物
+形态与真实入库零差别；幂等可重跑：用户/公司/文档按唯一键复用，chunks
+按 (company_id, chunk_id) ON CONFLICT 跳过。
 
 跑法（仓根，compose 三件套已 up）：
 
@@ -83,10 +83,11 @@ async def seed(n_users: int) -> list[dict[str, str]]:
 
     from app.config import get_settings
     from app.db import SessionFactory, engine
-    from app.ingest import append_to_index, make_source_id, split_pages
+    from app.ingest import embed_chunks, make_source_id, split_pages
     from app.models import Company, Document, User
     from app.security import create_access_token, hash_password
     from app.storage import ensure_bucket, put_bytes
+    from app.worker import store_chunks
 
     get_settings().jwt_access_ttl_minutes = 240  # 只影响本进程签发的 token
     await ensure_bucket()
@@ -133,21 +134,22 @@ async def seed(n_users: int) -> list[dict[str, str]]:
             if doc is None:
                 object_key = f"{user.id}/{company.id}/{sha}.pdf"
                 put_bytes(object_key, pdf, "application/pdf")
-                session.add(
-                    Document(
-                        owner_id=user.id,
-                        company_id=company.id,
-                        filename=filename,
-                        object_key=object_key,
-                        sha256=sha,
-                        size_bytes=len(pdf),
-                        status="ready",
-                    )
+                doc = Document(
+                    owner_id=user.id,
+                    company_id=company.id,
+                    filename=filename,
+                    object_key=object_key,
+                    sha256=sha,
+                    size_bytes=len(pdf),
+                    status="ready",
                 )
+                session.add(doc)
                 await session.commit()
+                await session.refresh(doc)
 
             # 索引语料与 PDF 原件解耦是刻意的：原件保证 retry/重跑链路可用，
-            # 索引用中文合成语料保证检索有的可命中（原件是 ASCII 占位文本）
+            # 索引用中文合成语料保证检索有的可命中（原件是 ASCII 占位文本）。
+            # P3.4 起入库走 chunks 表（store_chunks 幂等，重跑 ON CONFLICT 跳过）
             source_id = make_source_id(filename, sha)
             company_key = str(company.id)
             pages = [
@@ -161,8 +163,9 @@ async def seed(n_users: int) -> list[dict[str, str]]:
                 )
                 for p, text in enumerate(CORPUS_PAGES, start=1)
             ]
-            added = append_to_index(
-                str(user.id), company_key, split_pages(pages), embeddings
+            chunks = split_pages(pages)
+            added = await store_chunks(
+                user.id, company.id, doc.id, chunks, embed_chunks(chunks, embeddings)
             )
 
             entries.append(

@@ -2,6 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
     DateTime,
@@ -14,7 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -151,6 +152,44 @@ class TokenUsage(Base):
     cost_cny: Mapped[Decimal] = mapped_column(Numeric(12, 6))
     missing_calls: Mapped[int] = mapped_column(Integer, server_default="0")
     by_node: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+    __table_args__ = (
+        UniqueConstraint("company_id", "chunk_id"),
+        # HNSW/GIN 声明在模型上：测试库 create_all 与 dev 迁移建出同构索引
+        Index(
+            "ix_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("ix_chunks_text_tokens_gin", "text_tokens", postgresql_using="gin"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("companies.id"), index=True
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id"), index=True
+    )
+    chunk_id: Mapped[str] = mapped_column(String(520))  # "{source_id}:{seq}"
+    source_id: Mapped[str] = mapped_column(String(500))
+    page: Mapped[int] = mapped_column(Integer)
+    seq: Mapped[int] = mapped_column(Integer)
+    section: Mapped[str] = mapped_column(String(100), server_default="")
+    text: Mapped[str] = mapped_column(Text)
+    # 词法列 = jieba 预分词 + to_tsvector('simple')；向量列 = 1024 维 HNSW 余弦
+    text_tokens = mapped_column(TSVECTOR, nullable=False)
+    embedding = mapped_column(Vector(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

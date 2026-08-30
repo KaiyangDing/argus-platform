@@ -1,26 +1,53 @@
 """run_research 全链测试：ctx 三缝全 Fake，真 PG + 真 Redis，零 LLM 花费。
 
-零证据路径连 MinIO 索引都不需要（空索引→恒空 search→图走占位分支），
-有证据路径先 append 索引再跑，断言 evidence 落库与事件序列完整。
+零证据路径不需要任何语料（chunks 表无行 → EXISTS 短路恒空 → 图走占位
+分支），有证据路径先 store_chunks 入表再跑（P3.4：检索走 PG），断言
+evidence 落库与事件序列完整。
 """
 
 import uuid
+from collections import deque
+from collections.abc import Sequence
 
 import pytest
 from langchain_core.documents import Document as LCDocument
 from langchain_core.embeddings import DeterministicFakeEmbedding
-from langchain_core.language_models import FakeListChatModel
+from langchain_core.language_models import SimpleChatModel
+from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
 from app.config import get_settings
-from app.ingest import append_to_index, split_pages
-from app.models import Company, ResearchTask, User
+from app.ingest import embed_chunks, split_pages
+from app.models import Company, Document, ResearchTask, User
 from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
 
 Factory = async_sessionmaker[AsyncSession]
+
+
+def make_queue_chat(responses: Sequence[str]) -> BaseChatModel:
+    """线程安全按序出队的 chat 桩（与 test_research 同款）：write 的分节与
+    终稿 batch 并发消费，FakeListChatModel 的 self.i += 1 有竞态。"""
+    queue = deque(responses)
+
+    class _QueueChat(SimpleChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "queue-chat"
+
+        def _call(
+            self,
+            messages: list,
+            stop: list[str] | None = None,
+            run_manager: object = None,
+            **kwargs: object,
+        ) -> str:
+            return queue.popleft()
+
+    return _QueueChat()
+
 
 _PLAN = AspectPlan(
     aspects=[
@@ -90,8 +117,8 @@ async def test_run_research_zero_evidence_to_done(
         "job_try": 1,
         "embeddings": DeterministicFakeEmbedding(size=1024),
         # 零证据仍有 5 次非结构化调用：一致性核对 + 要点/关联/风险/边界四终稿
-        "chat": FakeListChatModel(
-            responses=[
+        "chat": make_queue_chat(
+            [
                 "冲突核对：无。",
                 "要点占位",
                 "关联占位",
@@ -125,6 +152,7 @@ async def test_run_research_with_corpus_records_evidence(
     session_factory: Factory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     task_id, owner_id, company_id = await _make_task(session_factory)
+    monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
     chunks = split_pages(
         [
             LCDocument(
@@ -133,17 +161,34 @@ async def test_run_research_with_corpus_records_evidence(
             )
         ]
     )
-    append_to_index(
-        owner_id, company_id, chunks, embeddings=DeterministicFakeEmbedding(size=1024)
+    async with session_factory() as session:
+        doc = Document(
+            owner_id=uuid.UUID(owner_id),
+            company_id=uuid.UUID(company_id),
+            filename="rw.pdf",
+            object_key="rw.pdf",
+            sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+            size_bytes=1,
+            status="ready",
+        )
+        session.add(doc)
+        await session.commit()
+        await session.refresh(doc)
+    fake_emb = DeterministicFakeEmbedding(size=1024)
+    await worker_mod.store_chunks(
+        uuid.UUID(owner_id),
+        uuid.UUID(company_id),
+        doc.id,
+        chunks,
+        embed_chunks(chunks, fake_emb),
     )
-    monkeypatch.setattr(worker_mod, "SessionFactory", session_factory)
 
     ctx = {
         "job_try": 1,
         "embeddings": DeterministicFakeEmbedding(size=1024),
-        # chat 序：digest×2 → 一致性核对 → 节×2 → 要点/关联/风险/边界
-        "chat": FakeListChatModel(
-            responses=[
+        # chat 消费：digest×2 → 一致性核对 →（节批×2）→（终稿批×4）
+        "chat": make_queue_chat(
+            [
                 "备忘录甲",
                 "备忘录乙",
                 "冲突核对：无。",
@@ -181,7 +226,7 @@ async def test_run_research_failed_on_final_try(
     ctx = {
         "job_try": worker_mod.MAX_TRIES,
         "embeddings": DeterministicFakeEmbedding(size=1024),
-        "chat": FakeListChatModel(responses=["未使用"]),
+        "chat": make_queue_chat(["未使用"]),
         "struct_factory": _boom,
     }
     result = await worker_mod.run_research(ctx, task_id)

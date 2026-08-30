@@ -47,6 +47,8 @@ async def _create_db_and_tables() -> None:
 
     engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
     async with engine.begin() as conn:
+        # chunks.embedding 的 vector 类型来自 pgvector 扩展，create_all 之前建好
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
     await engine.dispose()
 

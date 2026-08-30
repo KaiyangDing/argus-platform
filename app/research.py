@@ -53,6 +53,8 @@ CORE_CAP = 24  # 进写作证据表的核心证据上限（单窗有界）
 MIN_ASPECTS = 2
 MAX_ASPECTS = 5
 MAX_FOLLOWUPS = 2
+WRITE_CONCURRENCY = 4  # 分节/终稿 batch 并发上限；与 worker max_jobs=4 相乘，
+# 调用侧峰值并发 ≈16，qwen-flash 默认配额可容
 
 _MEMO_REF_RE = re.compile(r"〔([^〔〕]+)〕")
 
@@ -366,27 +368,33 @@ def build_graph(
                 )
             ).content
         )
-        section_parts: list[str] = []
+        # 分节生成并发化（P3.4）：各节只依赖共享的 conflicts 与本节证据子集，
+        # 互不依赖——batch 并发；零证据节仍是备忘录占位，不进 batch 不烧调用
+        rendered: list[str | None] = []
+        batch_inputs = []
         for section in state["sections"]:
             memo_mapped = map_memo_refs(section["summary"], numbers)
-            if section["refs"]:
-                aspect_qs = next(
-                    (
-                        render_questions(f["key_questions"])
-                        for f in state["findings"]
-                        if f["aspect_id"] == section["aspect_id"]
-                    ),
-                    "",
-                )
-                focus = next(
-                    (
-                        f["focus"]
-                        for f in state["findings"]
-                        if f["aspect_id"] == section["aspect_id"]
-                    ),
-                    "",
-                )
-                msgs = SECTION_PROMPT.invoke(
+            if not section["refs"]:
+                rendered.append(memo_mapped)
+                continue
+            aspect_qs = next(
+                (
+                    render_questions(f["key_questions"])
+                    for f in state["findings"]
+                    if f["aspect_id"] == section["aspect_id"]
+                ),
+                "",
+            )
+            focus = next(
+                (
+                    f["focus"]
+                    for f in state["findings"]
+                    if f["aspect_id"] == section["aspect_id"]
+                ),
+                "",
+            )
+            batch_inputs.append(
+                SECTION_PROMPT.invoke(
                     {
                         "company": state["company"],
                         "name": section["name"],
@@ -397,17 +405,34 @@ def build_graph(
                         "evidence": render_evidence_subset(evidence, section["refs"]),
                     }
                 )
-                body = str(writer.invoke(msgs).content)
-            else:
-                body = memo_mapped  # 零证据节：备忘录占位，不烧调用
-            section_parts.append(f"## {section['name']}\n{body}")
+            )
+            rendered.append(None)
+        if batch_inputs:
+            # batch 返回序 = 输入序（langchain 保序），按占位序回填
+            outs = iter(
+                writer.batch(
+                    batch_inputs, config={"max_concurrency": WRITE_CONCURRENCY}
+                )
+            )
+            rendered = [str(next(outs).content) if r is None else r for r in rendered]
+        section_parts = [
+            f"## {s['name']}\n{body}"
+            for s, body in zip(state["sections"], rendered, strict=True)
+        ]
 
         body_md = "\n\n".join(section_parts)
         extras = {"company": state["company"], "body": body_md}
-        exec_summary = str(writer.invoke(EXEC_SUMMARY_PROMPT.invoke(extras)).content)
-        synthesis = str(writer.invoke(SYNTHESIS_PROMPT.invoke(extras)).content)
-        risks = str(writer.invoke(RISK_PROMPT.invoke(extras)).content)
-        boundary = str(writer.invoke(BOUNDARY_PROMPT.invoke(extras)).content)
+        # 四终稿都只吃 body_md、互不依赖——第二个 batch（依赖节批完成，两批有先后）
+        finals = writer.batch(
+            [
+                EXEC_SUMMARY_PROMPT.invoke(extras),
+                SYNTHESIS_PROMPT.invoke(extras),
+                RISK_PROMPT.invoke(extras),
+                BOUNDARY_PROMPT.invoke(extras),
+            ],
+            config={"max_concurrency": WRITE_CONCURRENCY},
+        )
+        exec_summary, synthesis, risks, boundary = (str(m.content) for m in finals)
         report = (
             f"# {state['company']} 尽调报告\n\n## 投资要点\n{exec_summary}\n\n{body_md}\n\n"
             f"## 跨方面关联分析\n{synthesis}\n\n## 风险因素\n{risks}\n\n"

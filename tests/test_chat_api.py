@@ -105,7 +105,7 @@ async def test_chat_turn_streams_and_persists(
         monkeypatch,
         session_factory,
         [_doc("c1", "2024 年营业收入 5 亿元")],
-        FakeListChatModel(responses=["营业收入为 5 亿元 [1]。"]),
+        FakeListChatModel(responses=["2024 年营业收入", "营业收入为 5 亿元 [1]。"]),
     )
 
     events = await _post_chat(client, company_id, headers, "2024 年营收多少")
@@ -118,7 +118,7 @@ async def test_chat_turn_streams_and_persists(
     message = done["message"]
     assert message["role"] == "assistant"
     assert [e["chunk_id"] for e in message["evidence"]] == ["c1"]
-    assert queries == ["2024 年营收多少"]  # 首问无历史：原问直接检索
+    assert queries == ["2024 年营业收入"]  # 首问也过 condense，检索用改写查询
 
     listed = (
         await client.get(f"/api/companies/{company_id}/messages", headers=headers)
@@ -136,20 +136,25 @@ async def test_second_turn_condenses_with_history(
 ) -> None:
     headers, user_id = await _auth(client)
     company_id = await _make_company(session_factory, user_id)
-    # 同一 Fake 实例跨两次请求：轮1 无历史只耗 1 条；轮2 condense+answer 耗 2 条
+    # 同一 Fake 实例跨两次请求：每轮 condense+answer 各耗 2 条（首问也改写）
     queries = _wire(
         monkeypatch,
         session_factory,
         [_doc("c1", "毛利率 12.3%")],
         FakeListChatModel(
-            responses=["营收答 [1]。", "公司 2024 年毛利率", "毛利率为 12.3% [1]。"]
+            responses=[
+                "2024 年营业收入",
+                "营收答 [1]。",
+                "公司 2024 年毛利率",
+                "毛利率为 12.3% [1]。",
+            ]
         ),
     )
 
     await _post_chat(client, company_id, headers, "2024 年营收多少")
     events = await _post_chat(client, company_id, headers, "那毛利率呢")
 
-    assert queries == ["2024 年营收多少", "公司 2024 年毛利率"]  # 轮2 用改写查询检索
+    assert queries == ["2024 年营业收入", "公司 2024 年毛利率"]  # 两轮都用改写查询检索
     text = "".join(str(e["text"]) for e in events if e["type"] == "delta")
     assert text == "毛利率为 12.3% [1]。"
 
@@ -168,7 +173,8 @@ async def test_zero_evidence_sends_answer_as_single_delta(
         monkeypatch,
         session_factory,
         [],
-        FakeListChatModel(responses=["不应被调用"]),
+        # condense 照常消耗第 1 条；零证据下 answer 不调 LLM——哨兵不得浮出
+        FakeListChatModel(responses=["改写查询", "不应被调用"]),
     )
 
     events = await _post_chat(client, company_id, headers, "营收多少")

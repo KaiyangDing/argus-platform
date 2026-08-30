@@ -1,16 +1,19 @@
 """研究图 v0.2：纯函数面 + 全 Fake 端到端（多轮 researcher / 复审补派 / 分层写作）。
 
-同步执行下并行任务按提交序依次运行，struct 队列消费顺序确定：
+同步执行下 researcher 按提交序依次运行，struct 队列消费顺序确定：
 r1 全流程 → r2 全流程 → … → merge → review → (补派) → write。
-FakeListChatModel 响应序与图内非结构化调用一一对应（结构化调用走 struct 桩不消耗）：
-各方面 digest（每轮一次）→ 一致性核对 → 各节正文 → 要点 → 关联 → 风险 → 边界。
+chat 桩按队列出队；P3.4 起 write 的分节与四终稿走 batch 并发——**批内**
+的响应分配序不定（批间边界仍确定：digest 们 → 一致性 → 节批 → 终稿批），
+故报告断言只用集合语义（内容出现）与模板 heading 顺序，不用位置语义。
 """
 
 from collections import deque
+from collections.abc import Sequence
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.language_models import FakeListChatModel
+from langchain_core.language_models import SimpleChatModel
+from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
 from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
@@ -22,6 +25,32 @@ from app.research import (
     render_by_chunk_id,
     render_evidence_subset,
 )
+
+
+def make_queue_chat(responses: Sequence[str]) -> BaseChatModel:
+    """线程安全按序出队的 chat 桩。
+
+    write 并发 batch 下 FakeListChatModel 的 `self.i += 1` 有竞态（重复/
+    跳过响应都可能）；deque.popleft 原子，不重不漏。批内分配到哪个输入
+    不定——配套断言用集合语义。
+    """
+    queue = deque(responses)
+
+    class _QueueChat(SimpleChatModel):
+        @property
+        def _llm_type(self) -> str:
+            return "queue-chat"
+
+        def _call(
+            self,
+            messages: list,
+            stop: list[str] | None = None,
+            run_manager: object = None,
+            **kwargs: object,
+        ) -> str:
+            return queue.popleft()
+
+    return _QueueChat()
 
 
 def scripted_struct_factory(script: dict[type[BaseModel], list[BaseModel]]):
@@ -149,9 +178,9 @@ def test_graph_end_to_end_happy_path() -> None:
             ReviewVerdict: [ReviewVerdict(need_more=False, followups=[])],
         }
     )
-    # chat 序：digest r1、digest r2、一致性核对、节 r1、节 r2、要点、关联、风险、边界
-    chat = FakeListChatModel(
-        responses=[
+    # chat 消费：digest r1、digest r2、一致性核对 →（节批×2）→（终稿批×4）
+    chat = make_queue_chat(
+        [
             "备忘录甲：事实〔c-查A〕。",
             "备忘录乙：事实〔c-查B〕。",
             "冲突核对：无。",
@@ -180,8 +209,21 @@ def test_graph_end_to_end_happy_path() -> None:
         "## 证据不足与边界",
     ):
         assert heading in rpt
-    assert "节甲正文 [1]。" in rpt
-    assert rpt.endswith("边界。")
+    # 批内分配序不定：内容用集合语义，报告结构用模板 heading 相对顺序钉死
+    for text in (
+        "节甲正文 [1]。",
+        "节乙正文 [2]。",
+        "要点。",
+        "关联。",
+        "风险。",
+        "边界。",
+    ):
+        assert text in rpt
+    assert (
+        rpt.rindex("## 证据不足与边界")
+        > rpt.rindex("## 风险因素")
+        > rpt.rindex("## 跨方面关联分析")
+    )
     assert "〔c-查A〕" not in rpt  # 备忘录引用不得以原始形态漏进报告
 
 
@@ -214,9 +256,9 @@ def test_researcher_multi_round_accumulates_and_follows_gap_queries() -> None:
             ReviewVerdict: [ReviewVerdict(need_more=False, followups=[])],
         }
     )
-    # chat 序：r1 digest×2、r2 digest×1、一致性核对、节×2、要点、关联、风险、边界
-    chat = FakeListChatModel(
-        responses=[
+    # chat 消费：r1 digest×2、r2 digest×1、一致性核对 →（节批×2）→（终稿批×4）
+    chat = make_queue_chat(
+        [
             "备1〔c-初查〕",
             "备1v2〔c-初查〕〔c-补查〕",
             "备2〔c-查B〕",
@@ -257,9 +299,9 @@ def test_review_dispatches_followup_once() -> None:
             ],
         }
     )
-    # chat 序：digest×2 → (复审补派) digest×1 → 一致性核对 → 节×3 → 要点、关联、风险、边界
-    chat = FakeListChatModel(
-        responses=[
+    # chat 消费：digest×2 → (复审补派) digest×1 → 一致性核对 →（节批×3）→（终稿批×4）
+    chat = make_queue_chat(
+        [
             "备A〔c-查A〕",
             "备B〔c-查B〕",
             "备补〔c-查补〕",
@@ -292,12 +334,18 @@ def test_zero_evidence_skips_llm_calls() -> None:
             ReviewVerdict: [ReviewVerdict(need_more=False, followups=[])],
         }
     )
-    # 一致性核对 + 四个终稿调用；节正文零调用（零证据节直接放备忘录占位）
-    chat = FakeListChatModel(responses=["冲突核对：无。", "要", "联", "险", "界"])
+    # 一致性核对 + 终稿批×4；节正文零调用（零证据节直接放备忘录占位）
+    chat = make_queue_chat(
+        ["冲突核对：无。", "要点占位", "关联占位", "风险占位", "边界占位"]
+    )
     graph = build_graph(chat, lambda q, s, k: [], struct_factory=factory).compile()
     out = graph.invoke({"company": "测试公司", "slug": "t"})
 
     assert all("证据不足" in f["summary"] for f in out["findings"])
     assert out["evidence"] == []
-    assert "证据不足：检索未命中相关语料。" in out["report"]
-    assert out["report"].endswith("界")
+    rpt = out["report"]
+    assert "证据不足：检索未命中相关语料。" in rpt
+    # 终稿批内分配序不定：四个响应都到位即可，末节位置由模板保证
+    for text in ("要点占位", "关联占位", "风险占位", "边界占位"):
+        assert text in rpt
+    assert rpt.rindex("## 证据不足与边界") > rpt.rindex("## 风险因素")

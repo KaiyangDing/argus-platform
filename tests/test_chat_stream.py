@@ -89,7 +89,8 @@ async def test_disconnect_persists_answer_and_usage(
     _wire(
         monkeypatch,
         session_factory,
-        FakeListChatModel(responses=["营收 5 亿 [1]"], sleep=0.02),
+        # 首问也过 condense（P3.4 检索式改写）：第 1 条给改写、第 2 条给回答
+        FakeListChatModel(responses=["改写查询", "营收 5 亿 [1]"], sleep=0.02),
     )
 
     async with client.stream(
@@ -117,7 +118,8 @@ async def test_disconnect_persists_answer_and_usage(
         assert usage_rows[0].kind == "chat"
         assert usage_rows[0].ref_id == msgs[1].id
         # Fake 不带 usage_metadata：断线路径同样走「计缺不计零」而不是丢账
-        assert usage_rows[0].missing_calls == 1
+        # （condense + answer 两次调用都缺账）
+        assert usage_rows[0].missing_calls == 2
 
 
 async def test_gap_timeout_emits_error_and_drops_partial(
