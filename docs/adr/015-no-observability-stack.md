@@ -13,9 +13,10 @@ P3 原计划含可观测（Prometheus + Grafana）。埋点层曾完整落地（
 
 ## 决策
 
-- 采集栈不做。开发期可观测由既有件承担：structlog 结构化日志（全链
-  JSON）、LLMCallLogger 调用级日志（节点/耗时/错误，2026-08-19 十九
-  分钟静默事故的解药）、token_usage 记账表（成本可查、可对账单）。
+- 采集栈不做。开发期可观测由既有件承担：structlog 结构化日志（dev 用
+  ConsoleRenderer 打进程终端，生产切 JSONRenderer 是一行改动）、
+  LLMCallLogger 调用级日志（节点/耗时/错误，2026-08-19 十九分钟静默
+  事故的解药）、token_usage 记账表（成本可查、可对账单）。
 - 不以 Langfuse/LangSmith 替代：它们是 LLM 内容层 traces 平台（单请求
   因果链 + prompt/输出全文 + 评测标注），与服务层 metrics 分属可观测
   三支柱的不同支柱，本就不是同一问题的两个答案。且本仓记账必须事务性
