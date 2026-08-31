@@ -26,6 +26,12 @@ ADR-001 的架构定式「app 与 worker 同镜像不同启动命令」此前只
   边界，能讲清。
 - **暴露面收敛**：PG/Redis/MinIO 端口改绑 127.0.0.1，局域网可达的
   只有 8000；.env 不进镜像（.dockerignore），运行时经 env_file 注入。
+- **Redis 挂数据卷**（redisdata:/data，追补）：arq 队列是业务状态——
+  优雅停机重排的 job 就存在里面，容器可弃、数据不可弃；SIGTERM 触发
+  RDB 落盘，down/up 队列不丢。另一层界限是 arq 载荷键自带过期
+  （expires_extra_ms 默认 24h，自原始入队起算、重排不刷新）：停机超
+  一天的 job 会在 worker 拉起时框架层作废，任务卡 running 需手工
+  置 failed 再走重试端点续跑（checkpoint 在 PG，不受影响）。
 - **日志随容器化免费升级**：stdout 由 Docker json-file 驱动持久化，
   `docker compose logs` 可回看——「日志要不要落文件」的 12-factor
   答案由平台兑现，应用代码零改动。

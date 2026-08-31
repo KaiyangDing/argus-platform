@@ -20,6 +20,11 @@ services:
     image: redis:7-alpine
     ports:
       - "127.0.0.1:6379:6379"
+    # arq 队列是业务状态（停机重排的 job 就在里面）：容器可弃、数据不可弃。
+    # SIGTERM 时 Redis 按默认 save 点落 RDB 进卷，down/up 队列不丢；
+    # 注意 down 别带 -v（删卷）。载荷键仍有 arq 自身 ~24h 过期为另一层界限。
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
@@ -87,3 +92,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  redisdata:
