@@ -1,0 +1,13 @@
+# 构建上下文瘦身 + 秘密隔离（.env 绝不进镜像，运行时经 compose env_file 注入）
+.git
+.env
+.venv
+__pycache__
+**/__pycache__
+frontend/node_modules
+frontend/dist
+softnodejsnode_cache
+tests
+scripts
+docs
+*.md

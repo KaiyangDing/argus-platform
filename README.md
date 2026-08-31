@@ -47,6 +47,21 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
 
 探活：页面首页即三依赖状态；或 curl http://localhost:8000/healthz
 
+## 部署（容器全栈，一条命令）
+
+app 与 worker 同镜像不同命令（ADR-001/016），前端构建产物由 API 同源
+托管。默认 `docker compose up -d` 仍只起三件套（上面的 dev 形态不变），
+加 profile 才起全栈：
+
+    docker compose --profile full up -d --build
+
+起来后本机访问 http://localhost:8000；同一局域网设备访问
+http://<内网IP>:8000（`ipconfig` 看 IPv4；被防火墙拦时放行 8000 入站）。
+迁移在 app 启动序内自动执行；日志 `docker compose logs -f app worker`
+可回看（stdout 由 Docker 持久化）。全栈形态与 host uvicorn 会抢 8000，
+二者只跑其一；两形态共用同一数据卷。基础设施端口只绑 127.0.0.1，对
+局域网开放的入口仅 8000。
+
 ## 测试
 
     uv run pytest
@@ -138,3 +153,5 @@ u20/u40 一致。
 - [x] P3.6 收官（可观测采集栈 Prometheus/Grafana 裁决不做——取舍、替代件
       与 Langfuse/LangSmith 层次分析记 ADR-015；压测数字以 P3.3/P3.4
       同参数复测为准）
+- [x] P4.1 容器化部署（app/worker 同镜像不同命令；compose profile 分
+      dev/全栈两形态；前端同源托管；启动序迁移；局域网可访问；ADR-016）

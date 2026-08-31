@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import asyncpg
 import structlog
@@ -9,6 +10,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi_limiter import FastAPILimiter
 from minio import Minio
 from redis.asyncio import Redis
@@ -109,3 +111,11 @@ async def healthz() -> JSONResponse:
         status_code=200 if healthy else 503,
         content={"status": "ok" if healthy else "degraded", "deps": deps},
     )
+
+
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+if FRONTEND_DIST.is_dir():
+    # 容器/部署形态：前端产物同源托管（免 CORS 免代理免 nginx，ADR-016）。
+    # 挂 "/" 必须最后注册——注册序即匹配序，API 路由与 healthz 要先赢；
+    # dev 无 dist 不挂载，vite 代理照旧
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
