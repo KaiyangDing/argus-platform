@@ -13,9 +13,9 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
-from app.ingest import embed_chunks
-from app.models import Company, Document, User
-from app.retrieval import make_company_search
+from app.domain.models import Company, Document, User
+from app.engine.ingest import embed_chunks
+from app.engine.retrieval import make_company_search
 
 Factory = async_sessionmaker[AsyncSession]
 

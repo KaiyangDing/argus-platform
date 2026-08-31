@@ -25,9 +25,9 @@ from langchain_core.embeddings import Embeddings
 from pybreaker import CircuitBreakerError
 from sqlalchemy import text
 
-from app.breakers import ENDPOINT_FAILURES
-from app.db import sync_engine
-from app.ingest import tokenize_for_search
+from app.core.breakers import ENDPOINT_FAILURES
+from app.core.db import sync_engine
+from app.engine.ingest import tokenize_for_search
 
 log = structlog.get_logger()
 

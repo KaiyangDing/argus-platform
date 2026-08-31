@@ -26,9 +26,9 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
-from app.breakers import emb_breaker
-from app.config import get_settings
-from app.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
+from app.core.breakers import emb_breaker
+from app.core.config import get_settings
+from app.engine.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
 
 EMBED_BATCH = 10
 EMBED_DIM = 1024  # text-embedding-v4 输出维度（fake 向量按此对齐）

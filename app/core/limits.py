@@ -6,7 +6,7 @@
   承载力交给压测验证（限读路径会先把自己前端的轮询打死）；
 - SSE 并发闸（Redis 计数器）：流式连接一挂几分钟，按请求数限不住它——
   按「同时在线的流」限，研究进度流与对话流共享一个池；
-- 业务配额（预算/任务槽）在 app/usage.py（ADR-008），走 PG。
+- 业务配额（预算/任务槽）在 app/domain/usage.py（ADR-008），走 PG。
 
 rate_limit 在未 init 时 fail-open（直接放行）：限流是防滥用的护栏，不是
 核心功能的前置依赖，Redis 挂了不该连坐把登录拦死；这也让全部 API 测试
@@ -21,8 +21,8 @@ from fastapi_limiter import FastAPILimiter
 from redis.asyncio import Redis
 from redis.exceptions import NoScriptError
 
-from app.config import get_settings
-from app.security import decode_token
+from app.core.config import get_settings
+from app.core.security import decode_token
 
 # 阈值推导见 ADR-009：auth 三条 per-IP（人手速之上、脚本之下）；
 # research/chat 的真实约束在业务配额，这里只防连点；healthz 防压测放大器

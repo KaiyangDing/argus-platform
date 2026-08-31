@@ -10,7 +10,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 from pypdf import PdfWriter
 
-from app.ingest import (
+from app.engine.ingest import (
     annotate_page_sections,
     corpus_profile,
     load_pdf_pages,

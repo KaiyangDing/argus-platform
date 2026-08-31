@@ -21,9 +21,9 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy
 
-from app.prompts import CHAT_ANSWER_PROMPT, CONDENSE_PROMPT
-from app.research import EvidenceRef, doc_to_ref, render_evidence_subset
-from app.retrieval import SearchFn
+from app.engine.prompts import CHAT_ANSWER_PROMPT, CONDENSE_PROMPT
+from app.engine.research import EvidenceRef, doc_to_ref, render_evidence_subset
+from app.engine.retrieval import SearchFn
 
 CHAT_K = 8  # 单查询单窗：远小于研究图多轮预算，够答一问且引用纪律稳
 HISTORY_LIMIT = 8  # 进 prompt 的历史消息条数上限（4 轮对话）

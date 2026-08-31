@@ -28,8 +28,8 @@ from langchain_core.outputs import LLMResult
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import Settings, get_settings
-from app.models import ResearchTask, TokenUsage
+from app.core.config import Settings, get_settings
+from app.domain.models import ResearchTask, TokenUsage
 
 log = structlog.get_logger()
 

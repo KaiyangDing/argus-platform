@@ -11,8 +11,8 @@ from redis.asyncio import Redis
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.config import get_settings
-from app.models import Company, Document, ResearchTask
+from app.core.config import get_settings
+from app.domain.models import Company, Document, ResearchTask
 
 Factory = async_sessionmaker[AsyncSession]
 EMAIL = "alice@example.com"

@@ -9,13 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.db import get_session
+from app.core.config import get_settings
+from app.core.db import get_session
+from app.core.limits import UPLOAD_PER_MIN, rate_limit
+from app.core.storage import put_pdf
 from app.deps import get_arq, get_current_user
-from app.limits import UPLOAD_PER_MIN, rate_limit
-from app.models import Company, Document, User
-from app.schemas import CompanyIn, CompanyOut, DocumentOut
-from app.storage import put_pdf
+from app.domain.models import Company, Document, User
+from app.domain.schemas import CompanyIn, CompanyOut, DocumentOut
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
 log = structlog.get_logger()

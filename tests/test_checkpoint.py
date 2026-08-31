@@ -23,8 +23,8 @@ from langchain_core.language_models import SimpleChatModel
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.prompts import AspectPlan, QueryList, Reflection, ReviewVerdict
-from app.research import build_graph
+from app.engine.prompts import AspectPlan, QueryList, Reflection, ReviewVerdict
+from app.engine.research import build_graph
 from tests.test_research import (
     _doc,
     _search,

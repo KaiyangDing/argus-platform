@@ -24,7 +24,13 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.runnables import Runnable, RunnableLambda
 from pydantic import BaseModel
 
-from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
+from app.engine.prompts import (
+    AspectPlan,
+    AspectSpec,
+    QueryList,
+    Reflection,
+    ReviewVerdict,
+)
 
 FAKE_REPLY = (
     "根据语料，公司主营业务收入保持增长，毛利率总体稳定 [1]。"

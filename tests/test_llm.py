@@ -9,8 +9,8 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel
 
-import app.llm as llm_mod
-from app.llm import RetryingStruct, make_chat
+import app.engine.llm as llm_mod
+from app.engine.llm import RetryingStruct, make_chat
 
 
 class _Plan(BaseModel):

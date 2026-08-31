@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
-from app.ingest import embed_chunks, tokenize_for_search
-from app.models import Chunk, Company, Document, User
+from app.domain.models import Chunk, Company, Document, User
+from app.engine.ingest import embed_chunks, tokenize_for_search
 
 Factory = async_sessionmaker[AsyncSession]
 

@@ -18,8 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
-from app.models import Chunk, Company, Document, User
-from app.storage import put_bytes
+from app.core.storage import put_bytes
+from app.domain.models import Chunk, Company, Document, User
 
 Factory = async_sessionmaker[AsyncSession]
 

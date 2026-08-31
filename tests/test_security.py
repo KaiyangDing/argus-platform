@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 
-from app.config import get_settings
-from app.security import (
+from app.core.config import get_settings
+from app.core.security import (
     ALGORITHM,
     create_access_token,
     create_refresh_token,

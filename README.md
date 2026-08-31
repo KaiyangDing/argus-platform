@@ -23,6 +23,17 @@ argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章
 
 模块化单体：app 与 worker 同一代码库、同一镜像、不同启动命令（见 docs/adr/）。
 
+代码地图（`app/`，依赖方向单向，ADR-017）：
+
+    main.py / worker.py / deps.py   # 两个进程入口 + DI 组装胶水
+    core/     # 横切基础设施：config / logs / db / security / storage / breakers / limits
+    engine/   # 研究引擎（argus-lg 结论的自含重写）：llm / prompts / fakes /
+              #   ingest / retrieval / research / chat
+    domain/   # 业务域：models / schemas / usage（记账配额）
+    routers/  # HTTP 层：auth / companies / research / chat / usage
+
+core 不依赖兄弟包；engine 与 domain 只依赖 core；入口与 routers 组装一切。
+
 ## 怎么跑（dev）
 
 前置：Docker Desktop、uv、Python 3.14、Node 20+。

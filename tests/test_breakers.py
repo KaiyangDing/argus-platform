@@ -17,11 +17,11 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import APIConnectionError
 
-from app.breakers import make_breaker
-from app.config import get_settings
-from app.fakes import FakeChat
-from app.ingest import BreakerEmbeddings, make_embeddings
-from app.llm import BreakerChat, make_chat
+from app.core.breakers import make_breaker
+from app.core.config import get_settings
+from app.engine.fakes import FakeChat
+from app.engine.ingest import BreakerEmbeddings, make_embeddings
+from app.engine.llm import BreakerChat, make_chat
 
 
 def _conn_error() -> APIConnectionError:
@@ -146,7 +146,7 @@ def test_breaker_chat_generate_goes_through_breaker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_br = pybreaker.CircuitBreaker(fail_max=1, reset_timeout=600)
-    monkeypatch.setattr("app.llm.llm_breaker", test_br)
+    monkeypatch.setattr("app.engine.llm.llm_breaker", test_br)
     calls = 0
 
     def fake_generate(self: object, *args: object, **kwargs: object) -> None:
@@ -171,7 +171,7 @@ def test_breaker_embeddings_goes_through_breaker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     test_br = pybreaker.CircuitBreaker(fail_max=1, reset_timeout=600)
-    monkeypatch.setattr("app.ingest.emb_breaker", test_br)
+    monkeypatch.setattr("app.engine.ingest.emb_breaker", test_br)
     calls = 0
 
     def fake_embed_query(self: object, text: str) -> None:

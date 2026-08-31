@@ -21,11 +21,11 @@ from langchain_core.outputs import ChatGenerationChunk
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.routers.chat as chat_mod
-from app.chat import NO_EVIDENCE_ANSWER
 from app.deps import get_chat_model
+from app.domain.models import Company
+from app.engine.chat import NO_EVIDENCE_ANSWER
+from app.engine.retrieval import SearchFn
 from app.main import app
-from app.models import Company
-from app.retrieval import SearchFn
 
 Factory = async_sessionmaker[AsyncSession]
 PASSWORD = "password-123"

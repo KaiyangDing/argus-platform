@@ -15,16 +15,16 @@ from fastapi_limiter import FastAPILimiter
 from minio import Minio
 from redis.asyncio import Redis
 
-from app.config import DEV_JWT_SECRET, Settings, get_settings
-from app.db import engine, sync_engine
-from app.limits import HEALTHZ_PER_MIN, rate_limit
-from app.logs import setup_logging
+from app.core.config import DEV_JWT_SECRET, Settings, get_settings
+from app.core.db import engine, sync_engine
+from app.core.limits import HEALTHZ_PER_MIN, rate_limit
+from app.core.logs import setup_logging
+from app.core.storage import ensure_bucket
 from app.routers.auth import router as auth_router
 from app.routers.chat import router as chat_router
 from app.routers.companies import router as companies_router
 from app.routers.research import router as research_router
 from app.routers.usage import router as usage_router
-from app.storage import ensure_bucket
 
 setup_logging()
 log = structlog.get_logger()

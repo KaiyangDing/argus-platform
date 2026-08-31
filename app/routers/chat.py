@@ -28,17 +28,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
-from app.chat import HISTORY_LIMIT, ChatMsg, build_chat_graph
-from app.db import SessionFactory, get_session
+from app.core.db import SessionFactory, get_session
+from app.core.limits import CHAT_PER_MIN, rate_limit, sse_gate
 from app.deps import get_chat_model, get_current_user
-from app.ingest import make_embeddings
-from app.limits import CHAT_PER_MIN, rate_limit, sse_gate
-from app.llm import CHAT_MODEL
-from app.models import Message, User
-from app.retrieval import SearchFn, make_company_search
+from app.domain.models import Message, User
+from app.domain.schemas import ChatIn, MessageOut
+from app.domain.usage import UsageCollector, enforce_quota, record_usage
+from app.engine.chat import HISTORY_LIMIT, ChatMsg, build_chat_graph
+from app.engine.ingest import make_embeddings
+from app.engine.llm import CHAT_MODEL
+from app.engine.retrieval import SearchFn, make_company_search
 from app.routers.companies import _get_own_company
-from app.schemas import ChatIn, MessageOut
-from app.usage import UsageCollector, enforce_quota, record_usage
 
 log = structlog.get_logger()
 

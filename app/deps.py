@@ -6,10 +6,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from langchain_core.language_models import BaseChatModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
-from app.llm import make_chat
-from app.models import User
-from app.security import decode_token
+from app.core.db import get_session
+from app.core.security import decode_token
+from app.domain.models import User
+from app.engine.llm import make_chat
 
 _bearer = HTTPBearer(auto_error=False)
 

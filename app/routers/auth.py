@@ -6,18 +6,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
-from app.deps import get_current_user
-from app.limits import LOGIN_PER_MIN, REFRESH_PER_MIN, REGISTER_PER_MIN, rate_limit
-from app.models import User
-from app.schemas import LoginIn, RefreshIn, RegisterIn, TokenPair, UserOut
-from app.security import (
+from app.core.db import get_session
+from app.core.limits import LOGIN_PER_MIN, REFRESH_PER_MIN, REGISTER_PER_MIN, rate_limit
+from app.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
     hash_password,
     verify_password,
 )
+from app.deps import get_current_user
+from app.domain.models import User
+from app.domain.schemas import LoginIn, RefreshIn, RegisterIn, TokenPair, UserOut
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 

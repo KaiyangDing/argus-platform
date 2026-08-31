@@ -13,7 +13,7 @@ Retry）全是「每个调用各自撞墙」，治瞬态抖动；端点持续故
 
 两个端点分开熔断：chat（qwen-flash）与 embedding（text-embedding-v4）
 故障域独立，一个挂不连坐另一个——embedding 熔断期间对话仍可词法检索
-并正常回答（降级动作在 app/retrieval.py，批2）。
+并正常回答（降级动作在 app/engine/retrieval.py，批2）。
 
 Redis client 不开 decode_responses：CircuitRedisStorage 自己 .decode()，
 开了会对 str 二次 decode 崩。Redis 不可用时 storage 回落 fallback=closed
@@ -25,7 +25,7 @@ import redis
 import structlog
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
-from app.config import get_settings
+from app.core.config import get_settings
 
 log = structlog.get_logger()
 

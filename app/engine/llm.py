@@ -21,9 +21,9 @@ from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
-from app.breakers import llm_breaker
-from app.config import get_settings
-from app.fakes import FakeChat
+from app.core.breakers import llm_breaker
+from app.core.config import get_settings
+from app.engine.fakes import FakeChat
 
 DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 CHAT_MODEL = "qwen-flash"

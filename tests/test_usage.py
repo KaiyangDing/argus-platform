@@ -12,8 +12,8 @@ from decimal import Decimal
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, LLMResult
 
-from app.config import Settings
-from app.usage import QuotaStatus, UsageCollector, cost_of
+from app.core.config import Settings
+from app.domain.usage import QuotaStatus, UsageCollector, cost_of
 
 
 def _result(inp: int, out: int, *, streaming: bool = False) -> LLMResult:

@@ -18,10 +18,10 @@ from langchain_core.language_models import FakeListChatModel
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.limits import LOGIN_PER_MIN, REGISTER_PER_MIN, SseGate, sse_gate
 from app.deps import get_chat_model
-from app.limits import LOGIN_PER_MIN, REGISTER_PER_MIN, SseGate, sse_gate
+from app.domain.models import Company, ResearchTask
 from app.main import app
-from app.models import Company, ResearchTask
 
 Factory = async_sessionmaker[AsyncSession]
 PASSWORD = "password-123"

@@ -11,7 +11,7 @@ messages 供 token（metadata.langgraph_node 过滤节点），updates 供终态
 from langchain_core.documents import Document
 from langchain_core.language_models import FakeListChatModel
 
-from app.chat import (
+from app.engine.chat import (
     CHAT_K,
     NO_EVIDENCE_ANSWER,
     build_chat_graph,

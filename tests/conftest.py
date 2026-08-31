@@ -6,7 +6,7 @@
 - 测试引擎用 NullPool：pytest-asyncio 每个测试一个新事件循环，池化连接
   跨循环复用会炸，每次新建连接绕开
 - 经 app.dependency_overrides 覆盖 get_session：端点全走测试引擎，
-  app.db 的模块级 engine 在测试中从不建立连接
+  app.core.db 的模块级 engine 在测试中从不建立连接
 - client fixture 每次先 TRUNCATE users，测试间零残留
 """
 
@@ -49,9 +49,9 @@ async def _create_db_and_tables() -> None:
     finally:
         await admin.close()
 
-    import app.models  # noqa: F401  导入即注册表元数据
-    from app.db import Base, async_url
-    from app.storage import ensure_bucket
+    import app.domain.models  # noqa: F401  导入即注册表元数据
+    from app.core.db import Base, async_url
+    from app.core.storage import ensure_bucket
 
     engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
     async with engine.begin() as conn:
@@ -102,7 +102,7 @@ async def session_factory(
     _test_db: None,
 ) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """NullPool 会话工厂：worker/DB 直连测试用（绕过端点依赖注入）。"""
-    from app.db import async_url
+    from app.core.db import async_url
 
     engine = create_async_engine(async_url(TEST_DB_URL), poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -112,7 +112,7 @@ async def session_factory(
 
 @pytest.fixture
 async def client(_test_db: None, arq_stub: FakeArq) -> AsyncIterator[AsyncClient]:
-    from app.db import async_url, get_session
+    from app.core.db import async_url, get_session
     from app.deps import get_arq
     from app.main import app
 

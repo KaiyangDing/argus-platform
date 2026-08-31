@@ -15,8 +15,8 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from openai import APIConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.breakers import LLM_RESET_TIMEOUT
-from app.retrieval import make_company_search
+from app.core.breakers import LLM_RESET_TIMEOUT
+from app.engine.retrieval import make_company_search
 from app.worker import BREAKER_RETRY_DEFER, RETRY_DEFER, _error_detail, _retry_defer
 from tests.test_retrieval import TEXTS, _seed_company
 

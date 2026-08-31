@@ -10,10 +10,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from app.config import get_settings
-from app.db import async_url
-from app.models import Document
-from app.storage import _client
+from app.core.config import get_settings
+from app.core.db import async_url
+from app.core.storage import _client
+from app.domain.models import Document
 
 PDF_BYTES = (
     b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"

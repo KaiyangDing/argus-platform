@@ -5,11 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
+from app.core.db import get_session
 from app.deps import get_current_user
-from app.models import User
-from app.schemas import UsageOut
-from app.usage import WINDOW_HOURS, quota_status
+from app.domain.models import User
+from app.domain.schemas import UsageOut
+from app.domain.usage import WINDOW_HOURS, quota_status
 
 router = APIRouter(prefix="/api", tags=["usage"])
 

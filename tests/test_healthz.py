@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 import app.main as main_mod
-from app.config import Settings, get_settings
+from app.core.config import Settings, get_settings
 
 
 async def _ok(_settings: Settings) -> None:

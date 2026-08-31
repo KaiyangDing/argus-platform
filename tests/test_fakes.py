@@ -10,12 +10,12 @@ import pytest
 from langchain_core.documents import Document
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
-from app.chat import build_chat_graph
-from app.config import get_settings
-from app.fakes import FAKE_REPLY, FakeChat, fake_struct_instance
-from app.llm import RetryingStruct, make_chat
-from app.prompts import AspectPlan, QueryList, Reflection, ReviewVerdict
-from app.research import assign_aspect_ids, build_graph
+from app.core.config import get_settings
+from app.engine.chat import build_chat_graph
+from app.engine.fakes import FAKE_REPLY, FakeChat, fake_struct_instance
+from app.engine.llm import RetryingStruct, make_chat
+from app.engine.prompts import AspectPlan, QueryList, Reflection, ReviewVerdict
+from app.engine.research import assign_aspect_ids, build_graph
 
 
 def _doc(cid: str, text: str) -> Document:
@@ -89,7 +89,7 @@ def test_retrying_struct_over_fake_chat() -> None:
 def test_make_chat_and_embeddings_fake_switch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.ingest import make_embeddings
+    from app.engine.ingest import make_embeddings
 
     monkeypatch.setattr(get_settings(), "fake_llm", True)
     monkeypatch.setattr(get_settings(), "fake_llm_delay_s", 0.0)

@@ -5,7 +5,7 @@ import io
 from anyio import to_thread
 from minio import Minio
 
-from app.config import get_settings
+from app.core.config import get_settings
 
 
 def _client() -> Minio:

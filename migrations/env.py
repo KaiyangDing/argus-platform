@@ -6,9 +6,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-import app.models  # noqa: F401  导入即注册模型元数据
-from app.config import get_settings
-from app.db import Base, async_url
+import app.domain.models  # noqa: F401  导入即注册模型元数据
+from app.core.config import get_settings
+from app.core.db import Base, async_url
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

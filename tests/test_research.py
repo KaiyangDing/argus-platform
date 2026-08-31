@@ -16,8 +16,14 @@ from langchain_core.language_models import SimpleChatModel
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
-from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
-from app.research import (
+from app.engine.prompts import (
+    AspectPlan,
+    AspectSpec,
+    QueryList,
+    Reflection,
+    ReviewVerdict,
+)
+from app.engine.research import (
     assign_aspect_ids,
     build_graph,
     map_memo_refs,

@@ -31,7 +31,7 @@ HERE = Path(__file__).resolve().parent
 OUT_PATH = HERE / "users.json"
 
 PASSWORD = "loadtest-password"  # 登录不走 API（token 直签），密码只为字段完整
-EMBED_DIM = 1024  # 与 text-embedding-v4 / app.ingest 的向量维度一致
+EMBED_DIM = 1024  # 与 text-embedding-v4 / app.engine.ingest 的向量维度一致
 
 # 财报风格合成语料：词面覆盖 locustfile 追问集与 fake 研究查询
 # （营业收入 / 毛利率 / 主营业务 / 风险 / 现金流……），BM25 与向量两路都有命中。
@@ -81,12 +81,12 @@ async def seed(n_users: int) -> list[dict[str, str]]:
     from pdfgen import make_pdf
     from sqlalchemy import select
 
-    from app.config import get_settings
-    from app.db import SessionFactory, engine
-    from app.ingest import embed_chunks, make_source_id, split_pages
-    from app.models import Company, Document, User
-    from app.security import create_access_token, hash_password
-    from app.storage import ensure_bucket, put_bytes
+    from app.core.config import get_settings
+    from app.core.db import SessionFactory, engine
+    from app.core.security import create_access_token, hash_password
+    from app.core.storage import ensure_bucket, put_bytes
+    from app.domain.models import Company, Document, User
+    from app.engine.ingest import embed_chunks, make_source_id, split_pages
     from app.worker import store_chunks
 
     get_settings().jwt_access_ttl_minutes = 240  # 只影响本进程签发的 token

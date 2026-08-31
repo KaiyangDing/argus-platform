@@ -29,10 +29,14 @@ from redis.asyncio import Redis
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.breakers import LLM_RESET_TIMEOUT
-from app.config import get_settings
-from app.db import SessionFactory, engine, sync_engine
-from app.ingest import (
+from app.core.breakers import LLM_RESET_TIMEOUT
+from app.core.config import get_settings
+from app.core.db import SessionFactory, engine, sync_engine
+from app.core.logs import setup_logging
+from app.core.storage import get_bytes
+from app.domain.models import Chunk, Company, Document, ResearchTask
+from app.domain.usage import UsageCollector, record_usage
+from app.engine.ingest import (
     annotate_page_sections,
     corpus_profile,
     embed_chunks,
@@ -42,13 +46,9 @@ from app.ingest import (
     split_pages,
     tokenize_for_search,
 )
-from app.llm import CHAT_MODEL, make_chat
-from app.logs import setup_logging
-from app.models import Chunk, Company, Document, ResearchTask
-from app.research import build_graph
-from app.retrieval import make_company_search
-from app.storage import get_bytes
-from app.usage import UsageCollector, record_usage
+from app.engine.llm import CHAT_MODEL, make_chat
+from app.engine.research import build_graph
+from app.engine.retrieval import make_company_search
 
 if sys.platform == "win32":
     # psycopg async（checkpointer）不支持 Windows 默认的 Proactor 循环；

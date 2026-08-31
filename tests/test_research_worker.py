@@ -20,10 +20,16 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
-from app.config import get_settings
-from app.ingest import embed_chunks, split_pages
-from app.models import Company, Document, ResearchTask, User
-from app.prompts import AspectPlan, AspectSpec, QueryList, Reflection, ReviewVerdict
+from app.core.config import get_settings
+from app.domain.models import Company, Document, ResearchTask, User
+from app.engine.ingest import embed_chunks, split_pages
+from app.engine.prompts import (
+    AspectPlan,
+    AspectSpec,
+    QueryList,
+    Reflection,
+    ReviewVerdict,
+)
 
 Factory = async_sessionmaker[AsyncSession]
 

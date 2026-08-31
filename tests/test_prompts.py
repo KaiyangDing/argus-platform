@@ -4,7 +4,7 @@
 结构化模型的默认值语义（Reflection/ReviewVerdict 可留空字段）一并锁定。
 """
 
-from app.prompts import (
+from app.engine.prompts import (
     BOUNDARY_PROMPT,
     CHAT_ANSWER_PROMPT,
     CONDENSE_PROMPT,

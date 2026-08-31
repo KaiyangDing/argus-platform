@@ -9,7 +9,7 @@
 - write 三层化：投资要点 / 各节三段式（事实→分析→风险）/ 跨方面关联 / 风险汇总 / 边界；
   写作前一致性核对 pass；备忘录〔chunk_id〕由代码映射全局 [n]——编号翻译不交给 LLM；
 - LLM 节点挂 RetryPolicy(3)：瞬态 API 错误重跑节点不杀整跑；编程错误（含 RetryingStruct
-  耗尽的 ValueError）默认谓词不重试，快速失败（见 app/llm.py 三层防线分工）。
+  耗尽的 ValueError）默认谓词不重试，快速失败（见 app/engine/llm.py 三层防线分工）。
 防幻觉闸不动：零证据不调 LLM、只依据给定证据、数字逐字一致。
 产品映射：state.company=公司中文名（进 prompt），state.slug=str(company_id)（进检索，
 per-company 索引下闭包忽略该值，仅保签名兼容）。
@@ -26,8 +26,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy, Send
 from pydantic import BaseModel
 
-from app.llm import RetryingStruct
-from app.prompts import (
+from app.engine.llm import RetryingStruct
+from app.engine.prompts import (
     BOUNDARY_PROMPT,
     CONSISTENCY_PROMPT,
     DIGEST_PROMPT,
@@ -44,7 +44,7 @@ from app.prompts import (
     Reflection,
     ReviewVerdict,
 )
-from app.retrieval import SearchFn
+from app.engine.retrieval import SearchFn
 
 K_PER_QUERY = 12
 MAX_ROUNDS = 3  # 每方面 检索→消化→自评 轮数上限

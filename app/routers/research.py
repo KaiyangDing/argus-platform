@@ -12,14 +12,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
-from app.config import get_settings
-from app.db import get_session
+from app.core.config import get_settings
+from app.core.db import get_session
+from app.core.limits import RESEARCH_PER_MIN, rate_limit, sse_gate
 from app.deps import get_arq, get_current_user
-from app.limits import RESEARCH_PER_MIN, rate_limit, sse_gate
-from app.models import Document, ResearchTask, User
+from app.domain.models import Document, ResearchTask, User
+from app.domain.schemas import ResearchTaskOut, ResearchTaskSummary
+from app.domain.usage import enforce_quota
 from app.routers.companies import _get_own_company
-from app.schemas import ResearchTaskOut, ResearchTaskSummary
-from app.usage import enforce_quota
 
 router = APIRouter(prefix="/api", tags=["research"])
 log = structlog.get_logger()

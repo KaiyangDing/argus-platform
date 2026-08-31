@@ -15,8 +15,8 @@ from langchain_core.language_models import FakeListChatModel
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.deps import get_chat_model
+from app.domain.models import Company, Document, ResearchTask, TokenUsage
 from app.main import app
-from app.models import Company, Document, ResearchTask, TokenUsage
 
 Factory = async_sessionmaker[AsyncSession]
 PASSWORD = "password-123"

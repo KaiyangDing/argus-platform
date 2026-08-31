@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.routers.chat as chat_mod
 from app.deps import get_chat_model
+from app.domain.models import Company, Message, TokenUsage
+from app.engine.retrieval import SearchFn
 from app.main import app
-from app.models import Company, Message, TokenUsage
-from app.retrieval import SearchFn
 
 Factory = async_sessionmaker[AsyncSession]
 PASSWORD = "password-123"
