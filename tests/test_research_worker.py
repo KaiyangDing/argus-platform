@@ -16,6 +16,7 @@ from langchain_core.language_models import SimpleChatModel
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 from redis.asyncio import Redis
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.worker as worker_mod
@@ -146,6 +147,16 @@ async def test_run_research_zero_evidence_to_done(
     assert "merge" in nodes
     assert "review" in nodes
     assert "write" in nodes
+
+    # P3.5：done 即删 checkpoint（失败/取消才保留供续跑）
+    async with session_factory() as session:
+        remaining = (
+            await session.execute(
+                text("SELECT count(*) FROM checkpoints WHERE thread_id = :t"),
+                {"t": task_id},
+            )
+        ).scalar_one()
+    assert remaining == 0
 
 
 async def test_run_research_with_corpus_records_evidence(

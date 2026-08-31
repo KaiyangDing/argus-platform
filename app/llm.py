@@ -13,17 +13,38 @@ v0.2 同步（研究仓工程问题账处方）：
   空返回重试 ≤3，第二次起注入催办消息扰动输入，耗尽快速失败。
 """
 
+from collections.abc import Iterator
+
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from app.breakers import llm_breaker
 from app.config import get_settings
 from app.fakes import FakeChat
 
 DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 CHAT_MODEL = "qwen-flash"
 EMBED_MODEL = "text-embedding-v4"
+
+
+class BreakerChat(ChatOpenAI):
+    """chat 端点熔断包装：同步 _generate / _stream 全走 llm_breaker。
+
+    覆盖这两个即覆盖图内全部调用形态：图节点都是同步函数（langgraph 丢
+    线程池执行），invoke 在 token 流式消费下由 langchain 自动切到 _stream
+    （_should_stream 检测到 token 回调），writer.batch 也是线程池里的
+    invoke。异步 _agenerate 只有 async 节点会走，本仓没有。
+    breaker.call 原生支持生成器：open 态在建流前秒败，流中途异常也计数。
+    """
+
+    def _generate(self, *args: object, **kwargs: object) -> ChatResult:
+        return llm_breaker.call(super()._generate, *args, **kwargs)
+
+    def _stream(self, *args: object, **kwargs: object) -> Iterator[ChatGenerationChunk]:
+        yield from llm_breaker.call(super()._stream, *args, **kwargs)
 
 
 def make_chat(
@@ -34,7 +55,7 @@ def make_chat(
         # 压测线 B（ADR-011）：开关下沉在工厂里，deps / chat 路由 / worker
         # 所有注入点零改动统一生效
         return FakeChat(delay_s=settings.fake_llm_delay_s)
-    return ChatOpenAI(
+    return BreakerChat(
         model=model,
         base_url=DASHSCOPE_COMPAT_BASE,
         api_key=settings.dashscope_api_key,

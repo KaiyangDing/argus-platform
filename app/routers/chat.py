@@ -23,6 +23,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.language_models import BaseChatModel
+from pybreaker import CircuitBreakerError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
@@ -184,6 +185,12 @@ async def _produce(
         log.warning("chat_timeout", company_id=company_key, budget=CHAT_TOTAL_TIMEOUT)
         await queue.put(
             {"type": "error", "detail": "回答超时，已中止本轮生成；请稍后重试"}
+        )
+        await _record_failed_usage(owner_key, company_key, usage)
+    except CircuitBreakerError:
+        log.warning("chat_rejected_by_breaker", company_id=company_key)
+        await queue.put(
+            {"type": "error", "detail": "模型服务暂时不可用（熔断保护中），请稍后重试"}
         )
         await _record_failed_usage(owner_key, company_key, usage)
     except Exception as exc:

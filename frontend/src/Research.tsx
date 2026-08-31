@@ -4,6 +4,7 @@ import {
   ApiError,
   getResearch,
   listResearch,
+  retryResearch,
   startResearch,
   streamResearchEvents,
   type ResearchEvent,
@@ -43,12 +44,17 @@ type Props = {
 
 export default function Research({ companyId }: Props) {
   const [tasks, setTasks] = useState<ResearchTaskSummary[]>([])
-  const [selected, setSelected] = useState<ResearchTaskSummary | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ResearchTaskOut | null>(null)
   const [events, setEvents] = useState<ResearchEvent[]>([])
   const [error, setError] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+
+  // selected 从最新 tasks 派生而非存点击时的对象快照：任务状态会在选中期间
+  // 变化（failed → 点重试 → queued → running），旧快照会让渲染分支落进
+  // 无人认领的状态组合（曾表现为点击后下方空白"闪退"）
+  const selected = tasks.find((t) => t.id === selectedId) ?? null
 
   const loadTasks = useCallback(async () => {
     try {
@@ -60,7 +66,7 @@ export default function Research({ companyId }: Props) {
 
   useEffect(() => {
     setTasks([])
-    setSelected(null)
+    setSelectedId(null)
     setDetail(null)
     setEvents([])
     setError(null)
@@ -77,16 +83,20 @@ export default function Research({ companyId }: Props) {
     }
   }, [])
 
-  // 选中任务：进行中连 SSE 看实时进度（从头回放），已完成直接拉报告
+  // 选中任务：任何状态都回放事件流（服务端 XREAD from 0，读到 done/failed
+  // 自动关流）——进行中=回放+实时，已结束=纯回放，时间线与报告同屏共存
+  // （旧版结束即拆时间线换报告，过程记录无处可看，表现为"闪退"）。
+  // 依赖含 status：轮询发现状态迁移（重试后 failed→running、SSE 驱动
+  // running→done）会自动重建流并补拉 detail
+  const selectedStatus = selected?.status ?? null
   useEffect(() => {
     abortRef.current?.abort()
     setDetail(null)
     setEvents([])
-    if (!selected) return
+    if (!selectedId || !selectedStatus) return
 
-    if (selected.status === 'done' || selected.status === 'failed') {
-      void loadDetail(selected.id)
-      return
+    if (selectedStatus === 'done' || selectedStatus === 'failed') {
+      void loadDetail(selectedId)
     }
 
     const controller = new AbortController()
@@ -94,12 +104,12 @@ export default function Research({ companyId }: Props) {
     void (async () => {
       try {
         await streamResearchEvents(
-          selected.id,
+          selectedId,
           (e) => {
             setEvents((prev) => [...prev, e])
             if (e.node === 'done' || e.node === 'failed') {
+              // 拉新列表让派生 status 迁移，effect 随之重跑补拉 detail
               void loadTasks()
-              void loadDetail(selected.id)
             }
           },
           controller.signal,
@@ -109,7 +119,7 @@ export default function Research({ companyId }: Props) {
       }
     })()
     return () => controller.abort()
-  }, [selected, loadDetail, loadTasks])
+  }, [selectedId, selectedStatus, loadDetail, loadTasks])
 
   async function onStart() {
     setStarting(true)
@@ -117,11 +127,24 @@ export default function Research({ companyId }: Props) {
     try {
       const task = await startResearch(companyId)
       await loadTasks()
-      setSelected(task)
+      setSelectedId(task.id)
     } catch (err) {
       setError(errText(err))
     } finally {
       setStarting(false)
+    }
+  }
+
+  // 重新入队：failed=断点续跑（checkpointer 保留了失败任务的执行进度），
+  // queued=孤儿自愈；后端 _job_id 幂等，正常排队中误点也不会双投
+  async function onRetry(taskId: string) {
+    setError(null)
+    try {
+      await retryResearch(taskId)
+      await loadTasks() // 拉回 queued 态 → 派生 status 变化触发 effect 切 SSE 分支
+      setSelectedId(taskId)
+    } catch (err) {
+      setError(errText(err))
     }
   }
 
@@ -163,13 +186,13 @@ export default function Research({ companyId }: Props) {
           {tasks.map((t) => (
             <button
               key={t.id}
-              onClick={() => setSelected(selected?.id === t.id ? null : t)}
+              onClick={() => setSelectedId(selectedId === t.id ? null : t.id)}
               style={{
                 textAlign: 'left',
                 padding: '8px 12px',
                 borderRadius: 8,
-                border: `1px solid ${selected?.id === t.id ? COLORS.accent : COLORS.border}`,
-                background: selected?.id === t.id ? COLORS.bgSelected : '#fff',
+                border: `1px solid ${selectedId === t.id ? COLORS.accent : COLORS.border}`,
+                background: selectedId === t.id ? COLORS.bgSelected : '#fff',
                 cursor: 'pointer',
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -188,7 +211,35 @@ export default function Research({ companyId }: Props) {
         </div>
       )}
 
-      {selected && events.length > 0 && !detail && (
+      {selected && selected.status === 'queued' && events.length === 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            fontSize: 13,
+            color: COLORS.muted,
+          }}
+        >
+          <span>排队中…（长时间无进展可重新入队）</span>
+          <button
+            onClick={() => void onRetry(selected.id)}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 6,
+              border: `1px solid ${COLORS.border}`,
+              background: '#fff',
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            重新入队
+          </button>
+        </div>
+      )}
+
+      {selected && events.length > 0 && (
         <div
           style={{
             marginTop: 12,
@@ -197,7 +248,9 @@ export default function Research({ companyId }: Props) {
             padding: '12px 16px',
           }}
         >
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>研究进行中</div>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+            {detail ? '研究过程回放' : '研究进行中'}
+          </div>
           <ol style={{ margin: 0, paddingLeft: 18 }}>
             {events.map((e, i) => (
               <li key={i} style={{ fontSize: 13, color: COLORS.muted, margin: '4px 0' }}>
@@ -211,9 +264,32 @@ export default function Research({ companyId }: Props) {
       )}
 
       {detail && detail.status === 'failed' && (
-        <p style={{ color: COLORS.bad, marginTop: 12, fontSize: 14 }}>
-          研究失败：{detail.error}
-        </p>
+        <div
+          style={{
+            marginTop: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <p style={{ color: COLORS.bad, margin: 0, fontSize: 14 }}>
+            研究失败：{detail.error}
+          </p>
+          <button
+            onClick={() => void onRetry(detail.id)}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 6,
+              border: `1px solid ${COLORS.border}`,
+              background: '#fff',
+              cursor: 'pointer',
+              fontSize: 12,
+            }}
+          >
+            重试（断点续跑）
+          </button>
+        </div>
       )}
 
       {detail && detail.status === 'done' && detail.report_md && (

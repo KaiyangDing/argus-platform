@@ -3,6 +3,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
+import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -21,6 +22,7 @@ from app.schemas import ResearchTaskOut, ResearchTaskSummary
 from app.usage import enforce_quota
 
 router = APIRouter(prefix="/api", tags=["research"])
+log = structlog.get_logger()
 
 
 @router.post(
@@ -49,7 +51,16 @@ async def start_research(
     task = ResearchTask(owner_id=user.id, company_id=company.id, status="queued")
     session.add(task)
     await session.commit()
-    await arq.enqueue_job("run_research", str(task.id))
+    try:
+        await arq.enqueue_job(
+            "run_research", str(task.id), _job_id=f"research:{task.id}"
+        )
+    except Exception:
+        # Redis 瞬断：任务已落库，标 failed 让用户可见可重试，不留静默孤儿
+        log.exception("research_enqueue_failed", task_id=str(task.id))
+        task.status = "failed"
+        task.error = "任务入队失败，请点重试"
+        await session.commit()
     await session.refresh(task)
     return ResearchTaskSummary.model_validate(task)
 
@@ -90,6 +101,41 @@ async def get_research(
     return ResearchTaskOut.model_validate(task)
 
 
+@router.post(
+    "/research/{task_id}/retry",
+    dependencies=[Depends(rate_limit("research", RESEARCH_PER_MIN))],
+)
+async def retry_research(
+    task_id: uuid.UUID,
+    user: Annotated[User, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    arq: Annotated[ArqRedis, Depends(get_arq)],
+) -> ResearchTaskSummary:
+    task = await _get_own_task(task_id, user, session)
+    if task.status not in ("failed", "queued"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="只有 failed（断点续跑）或卡在 queued 的任务可以重新入队",
+        )
+    # failed 才要新槽；queued 已在并发计数里，再要一个会自己挤自己
+    await enforce_quota(session, user.id, need_slot=task.status == "failed")
+    task.status = "queued"
+    task.error = None
+    await session.commit()
+    try:
+        # _job_id 幂等：同任务已在队/在跑时 no-op——孤儿误判与双击都无害
+        await arq.enqueue_job(
+            "run_research", str(task.id), _job_id=f"research:{task.id}"
+        )
+    except Exception:
+        log.exception("research_enqueue_failed", task_id=str(task.id))
+        task.status = "failed"
+        task.error = "任务入队失败，请点重试"
+        await session.commit()
+    await session.refresh(task)
+    return ResearchTaskSummary.model_validate(task)
+
+
 @router.get("/research/{task_id}/events")
 async def research_events(
     task_id: uuid.UUID,
@@ -112,17 +158,24 @@ async def research_events(
 
     async def gen() -> AsyncIterator[str]:
         last_id = "0"
+        ended = False  # 上一条已吐出的事件是否终态（done/failed）
         while True:
-            batches = await redis.xread({stream_key: last_id}, block=15000, count=100)
+            # 终态后短窗探尾：failed 可能被重试复活（P3.5），流里若还有
+            # 后续事件必须继续吐；1s 静默才确认真到流尾、关流还槽
+            block_ms = 1000 if ended else 15000
+            batches = await redis.xread(
+                {stream_key: last_id}, block=block_ms, count=100
+            )
             if not batches:
+                if ended:
+                    return
                 yield ": keepalive\n\n"
                 continue
             for _stream, entries in batches:
                 for entry_id, fields in entries:
                     last_id = entry_id
                     yield f"data: {json.dumps(fields, ensure_ascii=False)}\n\n"
-                    if fields.get("node") in ("done", "failed"):
-                        return
+                    ended = fields.get("node") in ("done", "failed")
 
     return StreamingResponse(
         gen(),

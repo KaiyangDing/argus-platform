@@ -187,6 +187,13 @@ export async function startResearch(companyId: string): Promise<ResearchTaskSumm
   return (await resp.json()) as ResearchTaskSummary
 }
 
+/** 重新入队：failed 任务从断点续跑（checkpointer），queued 孤儿自愈。 */
+export async function retryResearch(taskId: string): Promise<ResearchTaskSummary> {
+  const resp = await apiFetch(`/api/research/${taskId}/retry`, { method: 'POST' })
+  if (!resp.ok) throw await readError(resp)
+  return (await resp.json()) as ResearchTaskSummary
+}
+
 export async function listResearch(companyId: string): Promise<ResearchTaskSummary[]> {
   const resp = await apiFetch(`/api/companies/${companyId}/research`)
   if (!resp.ok) throw await readError(resp)

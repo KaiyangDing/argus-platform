@@ -125,4 +125,10 @@ u20/u40 一致。
       OR 组词；worker max_jobs 1→4；write 分节/终稿 batch 并发；chat 首问
       检索式改写；同参数复测：research e2e 61s→4.4s、chat P95 9.8s→1.1s、
       u40 吞吐近翻倍；ADR-012）
-- [ ] P3 其余（P3.5 熔断降级 / P3.6 可观测与收官）
+- [x] P3.5 熔断降级与断点续跑（pybreaker Redis 共享态熔断 dashscope 两端点
+      ——API 与 worker 进程同视野；embedding 熔断时检索纯词法兜底、chat 秒级
+      明确报错、arq 重投 defer 联动冷却窗；LangGraph checkpointer 断点续跑：
+      superstep 间 + pending writes 两粒度恢复，失败任务重试端点=续跑入口；
+      入队韧性与孤儿 queued 自愈（_job_id 幂等 + enqueue 失败落 failed）；
+      ADR-013/014）
+- [ ] P3.6 可观测与收官（Prometheus+Grafana、复测）

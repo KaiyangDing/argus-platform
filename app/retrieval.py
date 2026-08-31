@@ -11,6 +11,7 @@ u40 压测定位的 chat 尾部元凶）→ chunks 表持久索引（GIN 倒排 
   可接受；检索质量以引擎仓评测口径为裁判；
 - 入库列与查询两侧同过 jieba + 'simple'，粒度一致即可对撞；
 - section 直接在行里，旧「检索层回贴」补丁整体退役。
+- embedding 不可用（熔断 open/端点故障）时降级纯词法路（P3.5），与 qts=NULL 词法自空互为镜像。
 SearchFn 契约不变：(query, company, k) → list[Document]，图代码零感知。
 """
 
@@ -18,27 +19,39 @@ import json
 import uuid
 from collections.abc import Callable
 
+import structlog
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
+from pybreaker import CircuitBreakerError
 from sqlalchemy import text
 
+from app.breakers import ENDPOINT_FAILURES
 from app.db import sync_engine
 from app.ingest import tokenize_for_search
+
+log = structlog.get_logger()
 
 SearchFn = Callable[[str, str, int], list[Document]]
 
 HYBRID_POOL = 200  # 深池再融合：小池会稀释单路命中（研究仓 S3 结论）
 RRF_K = 60  # RRF 平滑常数，业界默认（与旧 EnsembleRetriever 同值）
+# 降级判据与熔断计数同源：熔断 open 的秒拒 + 闸未开时的端点异常，
+# 都意味着「向量路暂时拿不到」——退纯词法。密钥错/BadRequest 不在内：
+# 配置事故要显式失败浮出，静默降级会把它埋掉。
+_DEGRADE_ERRORS = (CircuitBreakerError, *ENDPOINT_FAILURES)
 
 # 两路 CTE 各取深池名次，FULL OUTER JOIN 后 1/(K+rank) 相加再切 k。
 # 向量参数走 pgvector 文本格式 CAST，免每连接注册类型适配器；
 # :qts 为 NULL 时 to_tsquery 返回 NULL、@@ 判 NULL——词法路自然为空。
+# 降级（embedding 不可用）时向量路靠 :has_vec 布尔开关剪空——NULL 距离
+# 不过滤行，靠 :qvec IS NOT NULL 又会让参数类型推断歧义（psycopg 服务器
+# 端绑定：同参数出现在 CAST 与裸判空两种上下文，PG 拒绝推断）。
 _RRF_SQL = text("""
 WITH vec AS (
     SELECT chunk_id, source_id, page, section, text,
            row_number() OVER (ORDER BY embedding <=> CAST(:qvec AS vector)) AS rank
     FROM chunks
-    WHERE owner_id = :owner_id AND company_id = :company_id
+    WHERE owner_id = :owner_id AND company_id = :company_id AND :has_vec
     ORDER BY embedding <=> CAST(:qvec AS vector)
     LIMIT :pool
 ),
@@ -104,13 +117,19 @@ def make_company_search(
         return empty
 
     def search(query: str, _slug: str, k: int) -> list[Document]:
-        qvec = embeddings.embed_query(query)
+        try:
+            qvec: list[float] | None = embeddings.embed_query(query)
+        except _DEGRADE_ERRORS as exc:
+            # 可用性 > 检索质量；log 出声——静默降级 = 质量事故没人知道
+            log.warning("retrieval_degraded", reason=str(exc)[:80])
+            qvec = None
         with sync_engine.connect() as conn:
             rows = (
                 conn.execute(
                     _RRF_SQL,
                     {
-                        "qvec": json.dumps(qvec),
+                        "qvec": json.dumps(qvec) if qvec is not None else None,
+                        "has_vec": qvec is not None,
                         "qts": to_or_tsquery(query),
                         "owner_id": owner_uuid,
                         "company_id": company_uuid,

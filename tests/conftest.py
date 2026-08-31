@@ -13,6 +13,7 @@
 import asyncio
 import contextlib
 import os
+import sys
 from collections.abc import AsyncIterator
 
 import asyncpg
@@ -31,6 +32,13 @@ os.environ["ARGUS_DATABASE_URL"] = TEST_DB_URL
 os.environ["ARGUS_MINIO_BUCKET"] = "argus-test-documents"
 # 测试 Redis 隔离到 db 1（dev 的 arq 队列/事件流在 db 0），会话开局清空残留
 os.environ["ARGUS_REDIS_URL"] = TEST_REDIS_URL
+
+if sys.platform == "win32":
+    # psycopg async（AsyncPostgresSaver，P3.5）不支持 Windows 默认的
+    # Proactor 循环，整个测试会话换 Selector——asyncpg/redis 两种循环
+    # 皆可，psycopg 只认这个；生产 worker 侧同款（app/worker.py）。
+    # py3.14 起 policy 系统弃用（3.16 移除），届时随生态迁 loop_factory
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 async def _create_db_and_tables() -> None:
@@ -54,6 +62,13 @@ async def _create_db_and_tables() -> None:
 
     # ASGITransport 不执行 lifespan，测试 bucket 在此确保
     await ensure_bucket()
+
+    # P3.5：checkpoints 表由 AsyncPostgresSaver 自管迁移（不走 alembic），
+    # worker 测试真跑 saver，表要先到位；与生产 worker startup 同一入口
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    async with AsyncPostgresSaver.from_conn_string(TEST_DB_URL) as saver:
+        await saver.setup()
 
     redis = Redis.from_url(TEST_REDIS_URL)
     try:

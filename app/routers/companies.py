@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from typing import Annotated
 
+import structlog
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import select
@@ -17,6 +18,7 @@ from app.schemas import CompanyIn, CompanyOut, DocumentOut
 from app.storage import put_pdf
 
 router = APIRouter(prefix="/api/companies", tags=["companies"])
+log = structlog.get_logger()
 
 _CHUNK_SIZE = 1024 * 1024
 
@@ -133,7 +135,15 @@ async def upload_document(
         ) from exc
     await put_pdf(document.object_key, data)
     await session.commit()
-    await arq.enqueue_job("ingest_document", str(document.id))
+    try:
+        await arq.enqueue_job(
+            "ingest_document", str(document.id), _job_id=f"ingest:{document.id}"
+        )
+    except Exception:
+        log.exception("ingest_enqueue_failed", document_id=str(document.id))
+        document.status = "failed"
+        document.error = "任务入队失败，请点重试"
+        await session.commit()
     await session.refresh(document)
     return DocumentOut.model_validate(document)
 
@@ -152,14 +162,22 @@ async def retry_document(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
         )
-    if doc.status != "failed":
+    if doc.status not in ("failed", "queued"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Only failed documents can be retried",
+            detail="只有 failed 或卡在 queued 的文档可以重新入队",
         )
     doc.status = "queued"
     doc.error = None
     await session.commit()
-    await arq.enqueue_job("ingest_document", str(doc.id))
+    try:
+        await arq.enqueue_job(
+            "ingest_document", str(doc.id), _job_id=f"ingest:{doc.id}"
+        )
+    except Exception:
+        log.exception("ingest_enqueue_failed", document_id=str(doc.id))
+        doc.status = "failed"
+        doc.error = "任务入队失败，请点重试"
+        await session.commit()
     await session.refresh(doc)
     return DocumentOut.model_validate(doc)

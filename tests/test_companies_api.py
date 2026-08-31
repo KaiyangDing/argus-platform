@@ -166,11 +166,20 @@ async def test_upload_enqueues_ingest_job(
 async def _mark_failed(
     factory: async_sessionmaker[AsyncSession], document_id: str
 ) -> None:
+    await _mark_status(factory, document_id, "failed", error="boom")
+
+
+async def _mark_status(
+    factory: async_sessionmaker[AsyncSession],
+    document_id: str,
+    status_val: str,
+    error: str | None = None,
+) -> None:
     async with factory() as session:
         await session.execute(
             update(Document)
             .where(Document.id == uuid.UUID(document_id))
-            .values(status="failed", error="boom")
+            .values(status=status_val, error=error)
         )
         await session.commit()
 
@@ -195,14 +204,56 @@ async def test_retry_failed_document(
     assert len(arq_stub.jobs) == 2
 
 
-async def test_retry_non_failed_409(client: AsyncClient) -> None:
+async def test_retry_terminal_states_409(
+    client: AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    """P3.5 批4 起 queued 可重试（孤儿自愈），守卫只拦 ready 与进行中状态。"""
+    headers = await _auth_headers(client, "alice@example.com")
+    company = await _create_company(client, headers)
+    doc = (await _upload(client, company["id"], headers)).json()
+    for blocked in ("ready", "parsing"):
+        await _mark_status(session_factory, doc["id"], blocked)
+        resp = await client.post(
+            f"/api/companies/{company['id']}/documents/{doc['id']}/retry",
+            headers=headers,
+        )
+        assert resp.status_code == 409
+
+
+async def test_retry_queued_orphan_document(
+    client: AsyncClient, arq_stub: FakeArq
+) -> None:
+    """queued 直接重试 200：孤儿（commit 后 enqueue 前崩）的自愈入口；
+    正常排队误点由 _job_id 幂等兜底。"""
     headers = await _auth_headers(client, "alice@example.com")
     company = await _create_company(client, headers)
     doc = (await _upload(client, company["id"], headers)).json()
     resp = await client.post(
         f"/api/companies/{company['id']}/documents/{doc['id']}/retry", headers=headers
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "queued"
+    assert len(arq_stub.jobs) == 2
+
+
+async def test_upload_enqueue_failure_marks_failed(
+    client: AsyncClient,
+    arq_stub: FakeArq,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """入队失败不留静默孤儿：文档落 failed，前端重试按钮即恢复入口。"""
+    headers = await _auth_headers(client, "alice@example.com")
+    company = await _create_company(client, headers)
+
+    async def boom(*args: object, **kwargs: object) -> None:
+        raise ConnectionError("redis down")
+
+    monkeypatch.setattr(arq_stub, "enqueue_job", boom)
+    resp = await _upload(client, company["id"], headers)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "failed"
+    assert "入队失败" in body["error"]
 
 
 async def test_retry_foreign_document_404(

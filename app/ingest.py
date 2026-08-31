@@ -26,6 +26,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 
+from app.breakers import emb_breaker
 from app.config import get_settings
 from app.llm import DASHSCOPE_COMPAT_BASE, EMBED_MODEL
 
@@ -38,17 +39,29 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
 
+class BreakerEmbeddings(OpenAIEmbeddings):
+    """embedding 端点熔断包装：open 态秒败，检索层接住降级为纯词法（批2）。"""
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return emb_breaker.call(super().embed_documents, texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return emb_breaker.call(super().embed_query, text)
+
+
 def make_embeddings() -> Embeddings:
     settings = get_settings()
     if settings.fake_llm:
         # 压测线 B：确定性向量零 API 调用；查询与索引同分布，相似度检索行为正常
         return DeterministicFakeEmbedding(size=EMBED_DIM)
-    return OpenAIEmbeddings(
+    return BreakerEmbeddings(
         model=EMBED_MODEL,
         base_url=DASHSCOPE_COMPAT_BASE,
         api_key=settings.dashscope_api_key,
         check_embedding_ctx_length=False,
         chunk_size=EMBED_BATCH,
+        timeout=60.0,
+        max_retries=2,
     )
 
 

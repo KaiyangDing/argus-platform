@@ -9,6 +9,7 @@ max_jobs=4：chunks 行级 INSERT + ON CONFLICT 天然并发安全（P3.4 迁 pg
 """
 
 import asyncio
+import sys
 import tempfile
 import time
 import uuid
@@ -22,10 +23,13 @@ from arq.connections import RedisSettings
 from arq.worker import func as arq_func
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.documents import Document as LCDocument
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from pybreaker import CircuitBreakerError
 from redis.asyncio import Redis
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.breakers import LLM_RESET_TIMEOUT
 from app.config import get_settings
 from app.db import SessionFactory, engine, sync_engine
 from app.ingest import (
@@ -46,11 +50,32 @@ from app.retrieval import make_company_search
 from app.storage import get_bytes
 from app.usage import UsageCollector, record_usage
 
+if sys.platform == "win32":
+    # psycopg async（checkpointer）不支持 Windows 默认的 Proactor 循环；
+    # arq 没有 loop_factory 入口，模块 import 时全局换 Selector——
+    # asyncpg/redis 两种循环皆可，psycopg 只认这个。Linux 部署无此事。
+    # py3.14 起 policy 系统弃用（3.16 移除），届时随 arq 新口径迁移
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 setup_logging()
 log = structlog.get_logger()
 
 JOB_TIMEOUT = 30 * 60  # 解析+embedding 按分钟计，大文档给足
 MAX_TRIES = 3
+RETRY_DEFER = 10  # 瞬态错误重投间隔
+BREAKER_RETRY_DEFER = LLM_RESET_TIMEOUT + 30  # 熔断 open：重投等冷却窗过后
+
+
+def _retry_defer(exc: BaseException) -> int:
+    """熔断 open 时 10s 重投必再撞闸（闸至少开 60s）——三试半分钟内烧完、
+    任务白落 failed。拉长到冷却窗之后，重投的第一个调用恰好当探针。"""
+    return BREAKER_RETRY_DEFER if isinstance(exc, CircuitBreakerError) else RETRY_DEFER
+
+
+def _error_detail(exc: BaseException) -> str:
+    """用户可见错误文案：熔断器的英文内部话不穿到时间线与处置记录。"""
+    if isinstance(exc, CircuitBreakerError):
+        return "模型服务暂时不可用（熔断保护中）"
+    return f"{type(exc).__name__}: {exc}"
 
 
 class NoTextError(ValueError):
@@ -160,7 +185,7 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
         return "failed:NoTextError"
     except Exception as exc:
         if ctx.get("job_try", 1) >= MAX_TRIES:
-            await _set_status(doc_id, "failed", error=f"{type(exc).__name__}: {exc}")
+            await _set_status(doc_id, "failed", error=_error_detail(exc))
             log.warning("document_failed", document_id=document_id, error=str(exc))
             return f"failed:{type(exc).__name__}"
         log.warning(
@@ -169,7 +194,7 @@ async def ingest_document(ctx: dict, document_id: str) -> str:
             error=str(exc),
             job_try=ctx.get("job_try", 1),
         )
-        raise Retry(defer=10) from exc
+        raise Retry(defer=_retry_defer(exc)) from exc
 
 
 class LLMCallLogger(BaseCallbackHandler):
@@ -280,43 +305,59 @@ async def run_research(ctx: dict, task_id: str) -> str:
         search = await asyncio.to_thread(
             make_company_search, owner_key, company_key, embeddings
         )
-        graph = build_graph(
-            chat=chat, search=search, struct_factory=ctx.get("struct_factory")
-        ).compile()
 
-        report: str | None = None
-        evidence: list[dict[str, object]] | None = None
         state = {
             "company": company_name,
             "slug": company_key,
             "corpus_profile": profile,
         }
-        async for chunk in graph.astream(
-            state, {"callbacks": [LLMCallLogger(), usage]}, stream_mode="updates"
-        ):
-            for node, payload in chunk.items():
-                data = payload if isinstance(payload, dict) else {}
-                if node == "merge":
-                    evidence = data.get("evidence")
-                elif node == "write":
-                    report = data.get("report")
-                await emit(node, _describe(node, data))
-        if report is None:
-            raise RuntimeError("图执行未产出报告")
+        async with AsyncPostgresSaver.from_conn_string(
+            get_settings().database_url
+        ) as saver:
+            graph = build_graph(
+                chat=chat, search=search, struct_factory=ctx.get("struct_factory")
+            ).compile(checkpointer=saver)
+            config = {
+                "callbacks": [LLMCallLogger(), usage],
+                "configurable": {"thread_id": task_id},
+            }
+            snapshot = await graph.aget_state(config)
+            resumed = bool(snapshot.values)
+            if resumed and not snapshot.next:
+                # 上次图已跑完、done 落库前崩的毫秒级窗口：直接取终态不重执行
+                # （幂等窗口审计，与 P1.4「索引已写 ready 未置」同款方法论）
+                final_values = snapshot.values
+            else:
+                if resumed:
+                    await emit("resume", "从断点续跑：已完成节点不重算")
+                async for chunk in graph.astream(
+                    None if resumed else state, config, stream_mode="updates"
+                ):
+                    for node, payload in chunk.items():
+                        data = payload if isinstance(payload, dict) else {}
+                        await emit(node, _describe(node, data))
+                final_values = (await graph.aget_state(config)).values
+            report = final_values.get("report")
+            evidence = final_values.get("evidence")
+            if report is None:
+                raise RuntimeError("图执行未产出报告")
 
-        async with SessionFactory() as session:
-            await session.execute(
-                update(ResearchTask)
-                .where(ResearchTask.id == tid)
-                .values(
-                    status="done",
-                    report_md=report,
-                    evidence=evidence,
-                    error=None,
-                    finished_at=func.now(),
+            async with SessionFactory() as session:
+                await session.execute(
+                    update(ResearchTask)
+                    .where(ResearchTask.id == tid)
+                    .values(
+                        status="done",
+                        report_md=report,
+                        evidence=evidence,
+                        error=None,
+                        finished_at=func.now(),
+                    )
                 )
-            )
-            await session.commit()
+                await session.commit()
+            # 成功即删 checkpoint（省空间）；失败/取消保留——arq 重投与
+            # 手动重试都从断点续跑（批4 的 retry 端点吃的就是这份保留）
+            await saver.adelete_thread(task_id)
         await emit("done", "研究完成")
         await redis.expire(stream_key, 3600)
         log.info("research_done", task_id=task_id)
@@ -332,17 +373,17 @@ async def run_research(ctx: dict, task_id: str) -> str:
                     .where(ResearchTask.id == tid)
                     .values(
                         status="failed",
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=_error_detail(exc),
                         finished_at=func.now(),
                     )
                 )
                 await session.commit()
-            await emit("failed", f"{type(exc).__name__}: {exc}")
+            await emit("failed", _error_detail(exc))
             await redis.expire(stream_key, 3600)
             log.warning("research_failed", task_id=task_id, error=str(exc))
             return f"failed:{type(exc).__name__}"
-        await emit("retrying", f"{type(exc).__name__}: {exc}")
-        raise Retry(defer=10) from exc
+        await emit("retrying", _error_detail(exc))
+        raise Retry(defer=_retry_defer(exc)) from exc
     finally:
         await redis.aclose()
         try:
@@ -360,6 +401,15 @@ async def run_research(ctx: dict, task_id: str) -> str:
             log.exception("usage_record_failed", task_id=task_id)
 
 
+async def startup(ctx: dict) -> None:
+    # checkpoints 表由 saver 自管迁移（不走 alembic：第三方库私有 schema，
+    # 与业务表解耦）；重复调用安全，每次启动确保到位
+    async with AsyncPostgresSaver.from_conn_string(
+        get_settings().database_url
+    ) as saver:
+        await saver.setup()
+
+
 async def shutdown(ctx: dict) -> None:
     await engine.dispose()
     sync_engine.dispose()
@@ -371,7 +421,9 @@ class WorkerSettings:
         arq_func(run_research, timeout=60 * 60),
     ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
+    on_startup = startup
     on_shutdown = shutdown
     max_jobs = 4
+    keep_result = 0  # 不留 result key：_job_id 去重才能在任务完成后立即重投
     job_timeout = JOB_TIMEOUT
     max_tries = MAX_TRIES

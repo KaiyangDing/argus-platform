@@ -10,11 +10,14 @@ SessionFactory 换 NullPool 工厂（模块级引擎跨测试事件循环会炸�
 
 import json
 import uuid
+from collections.abc import Iterator
 
+import pybreaker
 import pytest
 from httpx import AsyncClient
 from langchain_core.documents import Document
 from langchain_core.language_models import FakeListChatModel
+from langchain_core.outputs import ChatGenerationChunk
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.routers.chat as chat_mod
@@ -208,6 +211,49 @@ async def test_error_surfaces_as_event_user_message_kept(
         await client.get(f"/api/companies/{company_id}/messages", headers=headers)
     ).json()
     # 两段式持久化：user 消息请求内已落库，assistant 因失败未落
+    assert [m["role"] for m in listed] == ["user"]
+
+
+async def test_breaker_open_maps_to_friendly_error(
+    client: AsyncClient, session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """熔断秒拒穿到 SSE（P3.5 批2）：error 事件给中文文案，不漏内部英文话。
+
+    CircuitBreakerError 不在 langgraph 默认不重试表里，RetryPolicy 会先
+    空转 3 次（闸开着必然全拒，~1.5s 退避）再穿出——本测试顺带锁定这条
+    路径最终确实到达 _produce 的分类处置。
+    """
+    headers, user_id = await _auth(client)
+    company_id = await _make_company(session_factory, user_id)
+
+    class _TrippedChat(FakeListChatModel):
+        # messages 流式下 langchain 走 _stream 而非 _call（_should_stream
+        # 检测 token 回调），两个入口都得拒——只堵 _call 会被绕过（首版
+        # 测试的教训：模型照常回答，error 断言落空）
+        def _call(self, *args: object, **kwargs: object) -> str:
+            raise pybreaker.CircuitBreakerError(
+                "Timeout not elapsed yet, circuit breaker still open"
+            )
+
+        def _stream(
+            self, *args: object, **kwargs: object
+        ) -> Iterator[ChatGenerationChunk]:
+            raise pybreaker.CircuitBreakerError(
+                "Timeout not elapsed yet, circuit breaker still open"
+            )
+
+    _wire(monkeypatch, session_factory, [], _TrippedChat(responses=["x"]))
+
+    events = await _post_chat(client, company_id, headers, "问一句")
+
+    assert events[-1]["type"] == "error"
+    detail = str(events[-1]["detail"])
+    assert "熔断" in detail
+    assert "circuit" not in detail
+    listed = (
+        await client.get(f"/api/companies/{company_id}/messages", headers=headers)
+    ).json()
+    # 两段式持久化：user 已落，assistant 因秒拒未落
     assert [m["role"] for m in listed] == ["user"]
 
 
