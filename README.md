@@ -8,6 +8,10 @@
 （spike-then-rewrite，不共享代码，见 docs/adr/005、006）；当前实现对齐
 argus-lg v0.2：多轮 map-reduce researcher、复审补派、三层研报、章节面包屑。
 
+**当前状态：项目收官。**两大核心（研究报告 / 追问对话）与 P3 工程硬化
+（成本配额 / 限流韧性 / 压测调优 / 检索并发化 / 熔断降级与断点续跑）
+全部收口，151 项测试全绿；可观测采集栈经取舍不做（docs/adr/015）。
+
 ## 架构
 
     browser ──► Vite dev (5173) ──proxy──► FastAPI app (8000) ──┬─► PostgreSQL 16 + pgvector
@@ -131,4 +135,6 @@ u20/u40 一致。
       superstep 间 + pending writes 两粒度恢复，失败任务重试端点=续跑入口；
       入队韧性与孤儿 queued 自愈（_job_id 幂等 + enqueue 失败落 failed）；
       ADR-013/014）
-- [ ] P3.6 可观测与收官（Prometheus+Grafana、复测）
+- [x] P3.6 收官（可观测采集栈 Prometheus/Grafana 裁决不做——取舍、替代件
+      与 Langfuse/LangSmith 层次分析记 ADR-015；压测数字以 P3.3/P3.4
+      同参数复测为准）
